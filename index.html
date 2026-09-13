@@ -1,0 +1,1083 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#152238" />
+<title>Pressing Connecté</title>
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500..700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root{ --ink:#141F36; --ink2:#1E3358; --teal:#0EA5A0; --amber:#F0AC3D; --bg:#F5F6F8; --border:#E7E9EE; --muted:#667085; --mutedLight:#9AA2B1; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; color:#101828; }
+  #app{ max-width:440px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(20,31,54,.06); position:relative; padding-bottom:64px; overflow-x:hidden; }
+  h1,h2,h3{ font-family:'Fraunces',Georgia,serif; margin:0; }
+  a{ text-decoration:none; color:inherit; }
+  button{ font-family:inherit; cursor:pointer; border:none; background:none; }
+  input, select{ font-family:inherit; font-size:14px; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+  .screen{ padding:16px 20px; animation:fadeIn .35s ease; }
+  .hero{ background:linear-gradient(150deg, var(--ink) 0%, var(--ink2) 100%); color:#fff; padding:34px 22px 42px; position:relative; overflow:hidden; animation:fadeIn .4s ease; }
+  .hero::after{ content:""; position:absolute; right:-40px; top:-40px; width:160px; height:160px; border-radius:50%; background:radial-gradient(circle, rgba(240,172,61,.25), transparent 70%); }
+  .hero .tag{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:rgba(255,255,255,.65); margin-bottom:8px; font-weight:600; }
+  .hero h1{ font-size:26px; line-height:1.25; font-weight:600; }
+  .hero p{ font-size:14px; color:rgba(255,255,255,.72); margin-top:12px; line-height:1.55; }
+  .btn{ display:block; width:100%; text-align:center; padding:13px; border-radius:14px; font-size:14px; font-weight:700; margin-top:10px; transition:transform .12s ease, box-shadow .12s ease; }
+  .btn:active{ transform:scale(.97); }
+  .btn-amber{ background:linear-gradient(135deg,#F5B94D,#E89A2A); color:var(--ink); box-shadow:0 6px 16px rgba(232,154,42,.35); }
+  .btn-outline-white{ border:1px solid rgba(255,255,255,.35); color:#fff; }
+  .btn-primary{ background:var(--ink); color:#fff; box-shadow:0 4px 12px rgba(20,31,54,.18); }
+  .btn-secondary{ border:1px solid var(--border); color:var(--muted); background:#fff; }
+  .btn-danger{ border:1px solid #F3C6C6; color:#B42323; background:#fff; }
+  .btn-row{ display:flex; gap:8px; }
+  .btn-row .btn{ margin-top:0; }
+  .steps{ display:flex; gap:4px; margin:10px 0 4px; }
+  .steps .bar{ height:6px; flex:1; border-radius:6px; background:var(--border); transition:background .2s; }
+  .steps .bar.done{ background:var(--teal); }
+  .step-caption{ font-size:12px; color:var(--mutedLight); margin-bottom:14px; }
+  .field-label{ font-size:12px; font-weight:700; color:var(--muted); margin-bottom:6px; }
+  .field{ margin-bottom:16px; }
+  input[type=text], input[type=date], input[type=time], input[type=number], input[type=password], input[type=email], input[type=tel], select{
+    width:100%; border:1px solid var(--border); border-radius:12px; padding:11px 13px; outline:none; background:#fff; transition:border-color .15s;
+  }
+  input:focus, select:focus{ border-color:var(--teal); }
+  .toggle-row{ display:flex; gap:8px; }
+  .toggle-card{ flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; padding:13px 0; border-radius:14px; border:1px solid var(--border); font-size:12px; font-weight:600; color:var(--muted); background:#fff; transition:all .15s; }
+  .toggle-card.active{ border-color:var(--teal); background:#EFFAF9; color:var(--teal); box-shadow:0 2px 8px rgba(14,165,160,.15); }
+  .chip-row{ display:flex; gap:8px; flex-wrap:wrap; }
+  .chip{ padding:7px 13px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--border); background:#fff; color:var(--muted); transition:all .15s; }
+  .chip.active{ background:var(--teal); border-color:var(--teal); color:#fff; box-shadow:0 2px 8px rgba(14,165,160,.25); }
+  .radio-row{ display:flex; align-items:center; justify-content:space-between; border:1px solid var(--border); border-radius:12px; padding:11px 13px; margin-bottom:8px; transition:all .15s; }
+  .radio-row.active{ border-color:var(--teal); background:#EFFAF9; }
+  .radio-dot{ width:16px; height:16px; border-radius:999px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; }
+  .radio-row.active .radio-dot{ border-color:var(--teal); }
+  .radio-dot span{ width:8px; height:8px; border-radius:999px; background:var(--teal); display:none; }
+  .radio-row.active .radio-dot span{ display:block; }
+  .qty-row{ display:flex; align-items:center; justify-content:space-between; border:1px solid var(--border); border-radius:14px; padding:12px 14px; margin-bottom:8px; background:#fff; transition:all .15s; }
+  .qty-row.active{ border-color:var(--teal); background:#EFFAF9; }
+  .qty-stepper{ display:flex; align-items:center; gap:10px; }
+  .qty-btn{ width:28px; height:28px; border-radius:8px; border:1px solid var(--border); background:#fff; font-size:16px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .qty-val{ min-width:18px; text-align:center; font-weight:700; }
+  .card{ border:1px solid var(--border); border-radius:16px; padding:14px; margin-bottom:10px; transition:box-shadow .15s; }
+  .summary-row{ display:flex; justify-content:space-between; font-size:14px; margin-bottom:6px; }
+  .summary-row .v{ font-weight:700; text-align:right; max-width:60%; }
+  .divider-row{ border-top:1px solid #f0f1f5; padding-top:8px; margin-top:4px; display:flex; justify-content:space-between; align-items:center; }
+  .header-row{ display:flex; align-items:center; gap:8px; justify-content:space-between; }
+  .header-left{ display:flex; align-items:center; gap:8px; }
+  .back-btn{ padding:4px; margin-left:-4px; color:var(--mutedLight); font-size:18px; }
+  .header-title{ font-size:16px; font-weight:700; }
+  .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; }
+  .stat-card{ border:1px solid var(--border); border-radius:14px; padding:14px; background:linear-gradient(160deg,#fff,#fafbfc); }
+  .stat-card .val{ font-family:'Fraunces',serif; font-size:20px; font-weight:600; }
+  .stat-card .lab{ font-size:11px; color:var(--muted); margin-top:2px; }
+  .order-card{ border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:8px; cursor:pointer; transition:box-shadow .15s, transform .1s; }
+  .order-card:active{ transform:scale(.99); }
+  .order-card .top{ display:flex; justify-content:space-between; align-items:flex-start; }
+  .badge{ font-size:11px; padding:3px 9px; border-radius:999px; background:#E7F8F6; color:var(--teal); font-weight:600; }
+  .badge-amber{ background:#FDF1DD; color:#946318; }
+  .badge-red{ background:#FBE7E7; color:#B42323; }
+  .info-row{ display:flex; gap:10px; align-items:flex-start; border:1px solid #f0f1f5; border-radius:12px; padding:12px; margin-bottom:8px; }
+  .info-row .lab{ font-size:11px; color:var(--mutedLight); }
+  .info-row .val{ font-size:14px; }
+  .empty{ text-align:center; padding:44px 20px; font-size:14px; color:var(--mutedLight); }
+  .bottom-nav{ position:fixed; bottom:0; width:100%; max-width:440px; left:50%; transform:translateX(-50%); border-top:1px solid #f0f1f5; background:#fff; display:flex; box-shadow:0 -4px 18px rgba(20,31,54,.05); }
+  .bottom-nav button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:10px 0; color:var(--mutedLight); font-size:10px; font-weight:600; transition:color .15s; }
+  .bottom-nav button.active{ color:var(--teal); }
+  .wa-btn{ display:flex; align-items:center; justify-content:center; gap:6px; width:100%; padding:13px; border-radius:14px; border:1px solid var(--border); font-size:14px; font-weight:600; color:#374151; }
+  .mission-card{ border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:12px; }
+  .mission-type{ font-size:11px; text-transform:uppercase; letter-spacing:.03em; font-weight:700; }
+  .topbar-real{ position:sticky; top:0; z-index:30; background:rgba(255,255,255,.92); backdrop-filter:blur(6px); border-bottom:1px solid #f0f1f5; padding:11px 20px; display:flex; justify-content:space-between; align-items:center; }
+  .topbar-real .who{ font-size:12px; color:var(--muted); }
+  .topbar-real .who b{ color:#101828; }
+  .topbar-right{ display:flex; align-items:center; gap:14px; }
+  .logout-btn{ font-size:12px; color:var(--mutedLight); }
+  .bell-btn{ position:relative; font-size:17px; }
+  .bell-dot{ position:absolute; top:-3px; right:-5px; background:#E44; color:#fff; font-size:9px; font-weight:700; border-radius:999px; min-width:15px; height:15px; display:flex; align-items:center; justify-content:center; padding:0 3px; }
+  .notif-panel{ position:absolute; top:52px; right:16px; width:300px; max-height:400px; overflow-y:auto; background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 12px 30px rgba(20,31,54,.15); z-index:40; }
+  .notif-item{ padding:12px 14px; border-bottom:1px solid #f4f5f7; font-size:13px; }
+  .notif-item.unread{ background:#F6FBFB; }
+  .notif-item .t{ font-weight:700; font-size:13px; }
+  .notif-item .m{ color:var(--muted); margin-top:2px; }
+  .notif-item .d{ color:var(--mutedLight); font-size:11px; margin-top:4px; }
+  .error-msg{ font-size:13px; color:#B42323; margin-top:6px; }
+  .info-msg{ font-size:13px; color:#0E8E8A; margin-top:6px; }
+  .center-msg{ padding:60px 30px; text-align:center; font-size:14px; color:var(--muted); }
+  .pressing-pick-card{ border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:10px; cursor:pointer; transition:box-shadow .15s, transform .1s; }
+  .pressing-pick-card:active{ transform:scale(.99); }
+  .banner-warning{ border:1px solid #F3D9A8; background:#FFF7E8; color:#8A6116; font-size:13px; border-radius:12px; padding:11px 13px; margin-bottom:8px; }
+  .banner-danger{ border:1px solid #F3C6C6; background:#FFF5F5; color:#B42323; font-size:13px; border-radius:12px; padding:15px; }
+  .slot-row{ display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+  .icon-x{ color:#B42323; font-size:16px; padding:4px; }
+  .link-btn{ font-size:12px; color:var(--teal); font-weight:600; text-align:center; display:block; width:100%; margin-top:10px; }
+  .install-fab{ position:fixed; bottom:76px; right:16px; max-width:440px; background:var(--ink); color:#fff; font-size:12px; font-weight:700; padding:11px 16px; border-radius:999px; box-shadow:0 8px 20px rgba(20,31,54,.3); z-index:50; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const SUPABASE_URL = "https://xlcobwacbrrxrgrqpbtj.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_ub0ojS-k5lYXxFRlhBrcwQ_lid5jXMp";
+
+let sb = null;
+let notifPollTimer = null;
+
+const STATUS_FLOW = [
+  "demande_recue","collecte_programmee","agent_en_route_collecte",
+  "vetements_recuperes","receptionne_pressing","en_traitement",
+  "pret","livraison_programmee","agent_en_route_livraison","livre","termine"
+];
+const STATUS_LABELS = {
+  demande_recue:"Demande reçue", collecte_programmee:"Collecte programmée",
+  agent_en_route_collecte:"Agent en route (collecte)", vetements_recuperes:"Vêtements récupérés",
+  receptionne_pressing:"Réceptionnés par le pressing", en_traitement:"En traitement",
+  pret:"Prêt", livraison_programmee:"Livraison programmée",
+  agent_en_route_livraison:"Agent en route (livraison)", livre:"Livré",
+  termine:"Terminée", annule:"Annulée"
+};
+const PLAN_LABELS = { mensuel:"Mensuel — 2 000 FCFA", trimestriel:"Trimestriel — 7 000 FCFA", semestriel:"Semestriel — 15 000 FCFA", annuel:"Annuel — 25 000 FCFA" };
+const PLAN_DURATIONS = { mensuel:30, trimestriel:90, semestriel:182, annuel:365 };
+const PLAN_AMOUNTS = { mensuel:2000, trimestriel:7000, semestriel:15000, annuel:25000 };
+
+function fcfa(n){ return (n||0).toLocaleString("fr-FR") + " FCFA"; }
+function nextStatus(cur){ const i = STATUS_FLOW.indexOf(cur); return (i===-1||i===STATUS_FLOW.length-1) ? cur : STATUS_FLOW[i+1]; }
+function esc(s){ return String(s==null?"":s).replace(/"/g,"&quot;"); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function myPressingId(){ return state.profile?.role==='pressing' ? state.myPressing?.id : state.myAgent?.pressing_id; }
+function timeAgo(dateStr){
+  const diff = (Date.now() - new Date(dateStr).getTime())/1000;
+  if(diff < 60) return "à l'instant";
+  if(diff < 3600) return Math.floor(diff/60) + " min";
+  if(diff < 86400) return Math.floor(diff/3600) + " h";
+  return Math.floor(diff/86400) + " j";
+}
+
+function computeSubStatus(sub){
+  if(!sub) return { status:"inconnu", daysLeft:null };
+  const today = new Date(todayISO());
+  if(sub.manual_status === "suspended") return { status:"suspended", daysLeft:null };
+  if(sub.current_period_end){
+    const end = new Date(sub.current_period_end);
+    const daysLeft = Math.ceil((end-today)/86400000);
+    return { status: daysLeft>=0 ? "active" : "expired", daysLeft };
+  }
+  if(sub.trial_end){
+    const end = new Date(sub.trial_end);
+    const daysLeft = Math.ceil((end-today)/86400000);
+    return { status: daysLeft>=0 ? "trial" : "expired", daysLeft };
+  }
+  return { status:"expired", daysLeft:null };
+}
+
+function freshState(){
+  return {
+    view:"loading", authScreen:"login", authError:null, authInfo:null, authLoading:false, signupPressings:[],
+    session:null, profile:null,
+
+    pressingsList:[], selectedPressingId:null, clientConfig:null, clientScreen:"choosePressing",
+    orders:[], activeOrderId:null, booking:null, bookingError:null, bookingSubmitting:false,
+    clientCampaigns:[], confirmedCampaigns:{},
+
+    myPressing:null, pressingOrders:[], pressingAgents:[], pressingSelectedOrderId:null, realtimeChannel:null,
+    mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], draftService:null, draftSlot:null,
+
+    myAgent:null, missions:[],
+
+    campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
+
+    adminPressings:[], adminSelectedPressingId:null, adminOrders:[], paymentFormFor:null,
+
+    notifications:[], unreadCount:0, notifOpen:false,
+  };
+}
+let state = freshState();
+
+function render(){ document.getElementById("app").innerHTML = renderRoot(); }
+function setState(patch){ Object.assign(state, patch); render(); }
+
+async function init(){
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const { data:{ session } } = await sb.auth.getSession();
+  state.session = session;
+  sb.auth.onAuthStateChange((event, sess) => {
+    state.session = sess;
+    if(event === "PASSWORD_RECOVERY"){
+      state.view = "auth"; state.authScreen = "resetPassword"; render(); return;
+    }
+    if(!sess){
+      const fresh = freshState(); fresh.view = "auth";
+      state = fresh; render();
+    }
+  });
+  if(session) await loadProfileAndRoute(); else { state.view = "auth"; render(); }
+  registerServiceWorker();
+}
+
+async function loadProfileAndRoute(retry){
+  const { data, error } = await sb.from("profiles").select("*").eq("id", state.session.user.id).single();
+  if(error || !data){
+    if(!retry){ setTimeout(() => loadProfileAndRoute(true), 900); return; }
+    state.view = "auth"; state.authError = "Profil introuvable — réessaie de te connecter."; render(); return;
+  }
+  const fresh = freshState();
+  fresh.session = state.session; fresh.profile = data; fresh.view = "app";
+  state = fresh;
+
+  if(data.role === "client"){
+    state.clientScreen = "choosePressing";
+    await Promise.all([loadPressingsListForClient(), loadClientOrders()]);
+  } else if(data.role === "pressing"){
+    await loadMyPressing();
+    if(state.myPressing){ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]); attachPressingRealtime(); }
+  } else if(data.role === "agent"){
+    await loadMyAgent();
+    if(state.myAgent) await loadMissions();
+  } else if(data.role === "admin"){
+    await loadAdminPressings();
+  }
+  await loadNotifications();
+  if(notifPollTimer) clearInterval(notifPollTimer);
+  notifPollTimer = setInterval(loadNotifications, 25000);
+  render();
+}
+
+async function logout(){
+  if(state.realtimeChannel) sb.removeChannel(state.realtimeChannel);
+  if(notifPollTimer) clearInterval(notifPollTimer);
+  await sb.auth.signOut();
+  const fresh = freshState(); fresh.view = "auth";
+  state = fresh;
+  render();
+}
+
+// =============================== AUTH ===============================
+function goAuthScreen(s){ setState({ authScreen:s, authError:null, authInfo:null }); if(s==="signup") loadSignupPressings(); }
+async function loadSignupPressings(){ const { data } = await sb.from("pressings").select("id,name").eq("status","active"); state.signupPressings = data || []; render(); }
+
+async function doLogin(email, password){
+  setState({ authLoading:true, authError:null });
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  state.authLoading = false;
+  if(error){ setState({ authError: error.message }); return; }
+  await loadProfileAndRoute();
+}
+async function doSignup(payload){
+  setState({ authLoading:true, authError:null, authInfo:null });
+  const { data, error } = await sb.auth.signUp({
+    email: payload.email, password: payload.password,
+    options: { data: { full_name: payload.fullName, phone: payload.phone, role: payload.role, pressing_id: payload.pressingId || null } }
+  });
+  state.authLoading = false;
+  if(error){ setState({ authError: error.message }); return; }
+  if(data?.user && !data.session){ setState({ authInfo: "Compte créé. Vérifie ta boîte mail pour confirmer ton adresse avant de te connecter." }); }
+  else if(data?.session){ state.session = data.session; await loadProfileAndRoute(); }
+}
+async function doForgotPassword(email){
+  setState({ authLoading:true, authError:null, authInfo:null });
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+  state.authLoading = false;
+  if(error){ setState({ authError: error.message }); return; }
+  setState({ authInfo: "Lien envoyé. Vérifie ta boîte mail (et les spams) pour réinitialiser ton mot de passe." });
+}
+async function doUpdatePassword(newPassword){
+  setState({ authLoading:true, authError:null });
+  const { error } = await sb.auth.updateUser({ password: newPassword });
+  state.authLoading = false;
+  if(error){ setState({ authError: error.message }); return; }
+  setState({ authInfo: "Mot de passe mis à jour ! Redirection..." });
+  setTimeout(() => loadProfileAndRoute(), 1200);
+}
+
+function renderAuth(){
+  if(state.authScreen === "login") return renderLogin();
+  if(state.authScreen === "signup") return renderSignup();
+  if(state.authScreen === "forgot") return renderForgotPassword();
+  if(state.authScreen === "resetPassword") return renderResetPassword();
+  return renderLogin();
+}
+function renderLogin(){
+  return `<div class="screen" style="padding-top:60px;">
+    <div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mutedLight);font-weight:700;margin-bottom:6px;">Pressing connecté</div>
+    <h1 style="font-size:22px;margin-bottom:4px;">Connexion</h1>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:22px;">Accédez à votre compte.</p>
+    <div class="field"><div class="field-label">Email</div><input type="email" id="loginEmail" /></div>
+    <div class="field"><div class="field-label">Mot de passe</div><input type="password" id="loginPassword" /></div>
+    ${state.authError ? `<div class="error-msg">${esc(state.authError)}</div>` : ""}
+    <button class="btn btn-primary" onclick="submitLogin()">${state.authLoading?'Connexion...':'Se connecter'}</button>
+    <button class="link-btn" onclick="goAuthScreen('forgot')">Mot de passe oublié ?</button>
+    <button class="btn btn-secondary" onclick="goAuthScreen('signup')" style="margin-top:14px;">Créer un compte</button>
+  </div>`;
+}
+function submitLogin(){ doLogin(document.getElementById("loginEmail").value.trim(), document.getElementById("loginPassword").value); }
+
+function renderForgotPassword(){
+  return `<div class="screen" style="padding-top:60px;">
+    <h1 style="font-size:20px;margin-bottom:4px;">Mot de passe oublié</h1>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">On t'envoie un lien de réinitialisation par email.</p>
+    <div class="field"><div class="field-label">Email</div><input type="email" id="forgotEmail" /></div>
+    ${state.authError ? `<div class="error-msg">${esc(state.authError)}</div>` : ""}
+    ${state.authInfo ? `<div class="info-msg">${esc(state.authInfo)}</div>` : ""}
+    <button class="btn btn-primary" onclick="submitForgot()">${state.authLoading?'Envoi...':'Envoyer le lien'}</button>
+    <button class="btn btn-secondary" onclick="goAuthScreen('login')" style="margin-top:8px;">Retour</button>
+  </div>`;
+}
+function submitForgot(){ doForgotPassword(document.getElementById("forgotEmail").value.trim()); }
+
+function renderResetPassword(){
+  return `<div class="screen" style="padding-top:60px;">
+    <h1 style="font-size:20px;margin-bottom:4px;">Nouveau mot de passe</h1>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">Choisis un nouveau mot de passe pour ton compte.</p>
+    <div class="field"><div class="field-label">Nouveau mot de passe</div><input type="password" id="newPassword" minlength="6" /></div>
+    ${state.authError ? `<div class="error-msg">${esc(state.authError)}</div>` : ""}
+    ${state.authInfo ? `<div class="info-msg">${esc(state.authInfo)}</div>` : ""}
+    <button class="btn btn-primary" onclick="submitNewPassword()">${state.authLoading?'Mise à jour...':'Mettre à jour'}</button>
+  </div>`;
+}
+function submitNewPassword(){ doUpdatePassword(document.getElementById("newPassword").value); }
+
+function renderSignup(){
+  const roleOptions = [["client","Client (gratuit)"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"],["agent","Agent — rejoint un pressing existant"]];
+  return `<div class="screen" style="padding-top:30px;">
+    <h1 style="font-size:20px;margin-bottom:4px;">Créer un compte</h1>
+    <div class="field"><div class="field-label">Nom complet</div><input type="text" id="suFullName" /></div>
+    <div class="field"><div class="field-label">Téléphone</div><input type="tel" id="suPhone" placeholder="6XX XX XX XX" /></div>
+    <div class="field"><div class="field-label">Email</div><input type="email" id="suEmail" /></div>
+    <div class="field"><div class="field-label">Mot de passe</div><input type="password" id="suPassword" minlength="6" /></div>
+    <div class="field"><div class="field-label">Rôle</div>
+      <select id="suRole" onchange="onSignupRoleChange()">${roleOptions.map(([v,l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+    </div>
+    <div class="field" id="pressingPickerField" style="display:none;">
+      <div class="field-label">Pressing à rejoindre</div>
+      <select id="suPressingId">${state.signupPressings.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    </div>
+    ${state.authError ? `<div class="error-msg">${esc(state.authError)}</div>` : ""}
+    ${state.authInfo ? `<div class="info-msg">${esc(state.authInfo)}</div>` : ""}
+    <button class="btn btn-primary" onclick="submitSignup()">${state.authLoading?'Création...':'Créer mon compte'}</button>
+    <button class="btn btn-secondary" onclick="goAuthScreen('login')" style="margin-top:8px;">J'ai déjà un compte</button>
+  </div>`;
+}
+function onSignupRoleChange(){ document.getElementById("pressingPickerField").style.display = document.getElementById("suRole").value==="agent" ? "block" : "none"; }
+function submitSignup(){
+  const role = document.getElementById("suRole").value;
+  doSignup({ fullName:document.getElementById("suFullName").value.trim(), phone:document.getElementById("suPhone").value.trim(),
+    email:document.getElementById("suEmail").value.trim(), password:document.getElementById("suPassword").value, role,
+    pressingId: role==="agent" ? document.getElementById("suPressingId").value : null });
+}
+
+// =============================== RACINE ===============================
+function renderRoot(){
+  if(state.view === "loading") return `<div class="center-msg">Chargement...</div>`;
+  if(state.view === "auth") return renderAuth();
+  const role = state.profile?.role;
+  let body = "";
+  if(role === "client") body = renderClientApp();
+  else if(role === "pressing") body = renderPressingApp();
+  else if(role === "agent") body = renderAgentApp();
+  else if(role === "admin") body = renderAdminApp();
+  return renderTopBar() + body;
+}
+function renderTopBar(){
+  const roleLabel = { client:"Client", pressing:"Réseau pressing", agent:"Agent", admin:"Administration plateforme" }[state.profile.role];
+  let context = "";
+  if(state.profile.role === "pressing" && state.myPressing) context = state.myPressing.name;
+  if(state.profile.role === "agent" && state.myAgent?.pressings) context = state.myAgent.pressings.name;
+  return `<div class="topbar-real">
+    <div class="who"><b>${esc(state.profile.full_name)}</b> · ${roleLabel}${context ? " · " + esc(context) : ""}</div>
+    <div class="topbar-right">
+      <button class="bell-btn" onclick="toggleNotifPanel()">🔔${state.unreadCount>0 ? `<span class="bell-dot">${state.unreadCount>9?'9+':state.unreadCount}</span>` : ""}</button>
+      <button class="logout-btn" onclick="logout()">Déconnexion</button>
+    </div>
+    ${state.notifOpen ? renderNotifPanel() : ""}
+  </div>`;
+}
+
+// =============================== NOTIFICATIONS ===============================
+async function loadNotifications(){
+  const { data } = await sb.from("notifications").select("*").eq("user_id", state.profile.id).order("created_at",{ascending:false}).limit(30);
+  state.notifications = data || [];
+  state.unreadCount = state.notifications.filter(n => !n.is_read).length;
+}
+function toggleNotifPanel(){ state.notifOpen = !state.notifOpen; if(state.notifOpen) loadNotifications().then(render); else render(); }
+async function markNotifRead(id){
+  await sb.from("notifications").update({ is_read:true }).eq("id", id);
+  await loadNotifications(); render();
+}
+async function markAllNotifRead(){
+  await sb.from("notifications").update({ is_read:true }).eq("user_id", state.profile.id).eq("is_read", false);
+  await loadNotifications(); render();
+}
+function renderNotifPanel(){
+  return `<div class="notif-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #f0f1f5;">
+      <b style="font-size:13px;">Notifications</b>
+      <button style="font-size:11px;color:var(--teal);font-weight:600;" onclick="markAllNotifRead()">Tout marquer lu</button>
+    </div>
+    ${state.notifications.length===0 ? `<div style="padding:20px;text-align:center;font-size:12px;color:var(--mutedLight);">Rien pour le moment.</div>` :
+      state.notifications.map(n => `<div class="notif-item ${n.is_read?'':'unread'}" onclick="markNotifRead('${n.id}')">
+        <div class="t">${esc(n.title)}</div><div class="m">${esc(n.message)}</div><div class="d">${timeAgo(n.created_at)}</div>
+      </div>`).join("")}
+  </div>`;
+}
+
+// =============================== CLIENT ===============================
+async function loadPressingsListForClient(){
+  const { data } = await sb.from("pressings").select("id,name,phone,whatsapp,address").eq("status","active");
+  state.pressingsList = data || [];
+}
+async function loadClientOrders(){
+  const { data } = await sb.from("orders").select("*, pressings(name), order_items(*)").eq("customer_id", state.profile.id).order("created_at",{ascending:false});
+  state.orders = data || [];
+}
+async function enrollInNetwork(pressingId){
+  await sb.from("pressing_customers").upsert({ pressing_id: pressingId, customer_id: state.profile.id }, { onConflict:"pressing_id,customer_id" });
+}
+async function loadClientCampaigns(pressingId){
+  const { data } = await sb.from("campaigns").select("*, campaign_slots(*)").eq("pressing_id", pressingId).eq("status","published").gte("campaign_date", todayISO()).order("campaign_date");
+  state.clientCampaigns = data || [];
+}
+
+function renderClientApp(){
+  if(state.clientScreen === "choosePressing") return renderChoosePressing();
+  const content = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory }[state.clientScreen]();
+  return content + renderBottomNav();
+}
+function renderChoosePressing(){
+  if(state.pressingsList.length === 0) return `<div class="screen"><div class="empty">Aucun pressing actif n'est disponible pour le moment.</div></div>`;
+  return `<div class="screen">
+    <h2 style="font-size:19px;margin-bottom:4px;">Choisis ton pressing</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">Plusieurs réseaux de pressing sont connectés à la plateforme.</p>
+    ${state.pressingsList.map(p => `<div class="pressing-pick-card" onclick="selectPressing('${p.id}')">
+      <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.address || "")}</div>
+    </div>`).join("")}
+    ${state.orders.length ? `<button class="btn btn-secondary" onclick="setState({clientScreen:'track'})" style="margin-top:12px;">Voir mes commandes existantes</button>` : ""}
+  </div>`;
+}
+async function selectPressing(id){
+  state.selectedPressingId = id;
+  const pressing = state.pressingsList.find(p => p.id === id);
+  await enrollInNetwork(id);
+  const [{ data: zones }, { data: services }, { data: slots }] = await Promise.all([
+    sb.from("zones").select("*").eq("is_active", true).order("name"),
+    sb.from("services").select("*").eq("pressing_id", id).eq("is_active", true).order("name"),
+    sb.from("time_slots").select("*").eq("pressing_id", id).eq("is_active", true).order("start_time"),
+  ]);
+  state.clientConfig = { pressing, zones: zones||[], services: services||[], slots: slots||[] };
+  state.booking = { step:0, mode:"domicile", zoneId:(zones&&zones[0]?.id)||"", address:"", landmark:"", date:"", slotId:(slots&&slots[0]?.id)||"", items:{}, quantity:"6–10", exactQuantity:"", recurring:false };
+  await loadClientCampaigns(id);
+  setState({ clientScreen:"home" });
+}
+function renderBottomNav(){
+  const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["history","Historique","🔁"]];
+  return `<div class="bottom-nav">${items.map(([id,label,ic]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')"><span>${ic}</span><span>${label}</span></button>`).join("")}</div>`;
+}
+async function clientGo(screen){
+  if(screen === "book" && !state.selectedPressingId){ setState({ clientScreen:"choosePressing" }); return; }
+  state.clientScreen = screen; render();
+  if(screen === "home" && state.selectedPressingId){ await loadClientCampaigns(state.selectedPressingId); render(); }
+  if(screen === "track" || screen === "history"){ await loadClientOrders(); render(); }
+}
+
+function renderClientHome(){
+  const pName = state.clientConfig?.pressing?.name || "";
+  return `
+  <div class="hero">
+    <div class="tag">Pressing connecté${pName ? " · " + esc(pName) : ""}</div>
+    <h1>Votre pressing<br/>vient à vous.</h1>
+    <p>Nous récupérons vos vêtements chez vous, les confions au pressing et vous les rapportons une fois prêts.</p>
+    <button class="btn btn-amber" onclick="clientGo('book')">Faire récupérer mes vêtements</button>
+    <button class="btn btn-outline-white" onclick="setState({clientScreen:'choosePressing'})">Changer de pressing</button>
+  </div>
+  ${renderCampaignsForClient()}
+  <div class="screen">
+    <a class="wa-btn" href="https://wa.me/${(state.clientConfig?.pressing?.whatsapp||'').replace(/\D/g,'')}" target="_blank">💬 Contacter le pressing sur WhatsApp</a>
+  </div>`;
+}
+function renderCampaignsForClient(){
+  if(!state.clientCampaigns || state.clientCampaigns.length===0) return "";
+  return `<div class="screen" style="padding-top:16px;padding-bottom:0;">
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px;">📢 Ramassages programmés</div>
+    ${state.clientCampaigns.map(c => `<div class="card">
+      <div style="font-weight:700;font-size:14px;">${esc(c.title)}</div>
+      <div style="font-size:12px;color:var(--muted);margin:2px 0 8px;">${c.campaign_date} · ${c.mode==='domicile'?'À domicile':'Point de rendez-vous'}</div>
+      ${c.message ? `<div style="font-size:13px;margin-bottom:8px;">${esc(c.message)}</div>` : ""}
+      <div class="chip-row">
+        ${(c.campaign_slots||[]).map(s => `<button class="chip ${state.confirmedCampaigns[c.id]===s.id?'active':''}" onclick="confirmCampaignSlot('${c.id}','${s.id}','${c.mode}','${c.campaign_date}')">
+          ${esc(s.zone_label)} · ${s.start_time.slice(0,5)}${state.confirmedCampaigns[c.id]===s.id?' ✓':''}
+        </button>`).join("")}
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+async function confirmCampaignSlot(campaignId, slotId, mode, date){
+  try{
+    const { data: order, error } = await sb.from("orders").insert({
+      customer_id: state.profile.id, pressing_id: state.selectedPressingId, pickup_mode: mode, pickup_date: date,
+      notes: "Confirmation collecte groupée", estimated_amount: 0
+    }).select().single();
+    if(error) throw error;
+    await sb.from("campaign_responses").upsert({ campaign_id: campaignId, slot_id: slotId, customer_id: state.profile.id, order_id: order.id, status:"confirmed" }, { onConflict:"campaign_id,customer_id" });
+    state.confirmedCampaigns[campaignId] = slotId;
+    await loadClientOrders();
+    render();
+  } catch(e){ alert("Erreur : " + e.message); }
+}
+
+function renderBookingFlow(){
+  const cfg = state.clientConfig; const b = state.booking;
+  if(!cfg) return `<div class="screen"><div class="empty">Choisis d'abord un pressing.</div></div>`;
+  const zoneObj = cfg.zones.find(z => z.id === b.zoneId) || cfg.zones[0] || { pickup_fee:0, delivery_fee:0 };
+  const itemsTotal = Object.entries(b.items).reduce((s,[svcId,qty]) => {
+    const svc = cfg.services.find(x => x.id === svcId);
+    return s + (svc ? svc.price*qty : 0);
+  }, 0);
+  const estimated = (itemsTotal || 3500) + (zoneObj.pickup_fee||0) + (zoneObj.delivery_fee||0);
+  const steps = ["Lieu & créneau","Services","Récapitulatif"];
+  let stepHtml = "";
+  if(b.step === 0){
+    stepHtml = `
+      <div class="field"><div class="field-label">Mode de collecte</div>
+        <div class="toggle-row">
+          <button class="toggle-card ${b.mode==='domicile'?'active':''}" onclick="setBookingField('mode','domicile')">🏠<br/>À domicile</button>
+          <button class="toggle-card ${b.mode==='point_rdv'?'active':''}" onclick="setBookingField('mode','point_rdv')">📍<br/>Point de rendez-vous</button>
+        </div></div>
+      <div class="field"><div class="field-label">Zone</div>
+        <div class="chip-row">${cfg.zones.map(z => `<button class="chip ${b.zoneId===z.id?'active':''}" onclick="setBookingField('zoneId','${z.id}')">${esc(z.name)}</button>`).join("")}</div></div>
+      ${b.mode==='domicile' ? `
+        <div class="field"><div class="field-label">Adresse précise</div><input type="text" value="${esc(b.address)}" placeholder="Ex : près du carrefour" oninput="state.booking.address=this.value" /></div>
+        <div class="field"><div class="field-label">Point de repère (optionnel)</div><input type="text" value="${esc(b.landmark)}" placeholder="Ex : portail bleu" oninput="state.booking.landmark=this.value" /></div>
+      ` : `<div class="card">Le point de rendez-vous te sera communiqué par le pressing après confirmation.</div>`}
+      <div class="field"><div class="field-label">Date de collecte</div><input type="date" value="${esc(b.date)}" oninput="state.booking.date=this.value" /></div>
+      <div class="field"><div class="field-label">Créneau</div>
+        ${cfg.slots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Ce pressing n'a pas encore configuré de créneau — ta demande sera traitée sans créneau fixe.</p>` :
+          cfg.slots.map(sl => `<div class="radio-row ${b.slotId===sl.id?'active':''}" onclick="setBookingField('slotId','${sl.id}')"><span>⏰ ${esc(sl.label)}</span><span class="radio-dot"><span></span></span></div>`).join("")}
+      </div>
+      <button class="btn btn-primary" onclick="bookingStep(1)">Continuer</button>
+    `;
+  } else if(b.step === 1){
+    stepHtml = `
+      <div class="field"><div class="field-label">Services — indique la quantité pour chaque type</div>
+        ${cfg.services.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Ce pressing n'a pas encore configuré de service — indique tes besoins dans le champ ci-dessous.</p>` :
+          cfg.services.map(sv => { const qty = b.items[sv.id] || 0; return `
+          <div class="qty-row ${qty>0?'active':''}">
+            <div><div style="font-size:14px;font-weight:700;">${esc(sv.name)}</div><div style="font-size:12px;color:var(--muted);">${fcfa(sv.price)} / ${esc(sv.unit)}</div></div>
+            <div class="qty-stepper">
+              <button class="qty-btn" onclick="setItemQty('${sv.id}',-1)">−</button>
+              <span class="qty-val">${qty}</span>
+              <button class="qty-btn" onclick="setItemQty('${sv.id}',1)">+</button>
+            </div>
+          </div>`; }).join("")}
+      </div>
+      <div class="field"><div class="field-label">Estimation rapide (si tu ne connais pas le détail)</div>
+        <div class="chip-row">${["1–5","6–10","11–20","20+"].map(q => `<button class="chip ${b.quantity===q?'active':''}" onclick="setBookingField('quantity','${q}')">${q} vêtements</button>`).join("")}</div></div>
+      <div class="field"><div class="field-label">Quantité exacte (optionnel)</div>
+        <input type="number" min="0" value="${esc(b.exactQuantity)}" placeholder="Ex : 14" oninput="state.booking.exactQuantity=this.value" /></div>
+      <div class="btn-row"><button class="btn btn-secondary" onclick="bookingStep(0)">Retour</button><button class="btn btn-primary" onclick="bookingStep(2)">Continuer</button></div>
+    `;
+  } else {
+    const itemLines = Object.entries(b.items).filter(([,q])=>q>0).map(([svcId,qty]) => {
+      const svc = cfg.services.find(x => x.id === svcId);
+      return svc ? `${svc.name} ×${qty} (${fcfa(svc.price*qty)})` : null;
+    }).filter(Boolean);
+    stepHtml = `
+      <div class="card">
+        <div class="summary-row"><span>Mode</span><span class="v">${b.mode==='domicile'?'À domicile':'Point de rendez-vous'}</span></div>
+        <div class="summary-row"><span>Zone</span><span class="v">${esc(zoneObj.name||'')}</span></div>
+        <div class="summary-row"><span>Date</span><span class="v">${b.date || 'À préciser'}</span></div>
+        ${itemLines.length ? itemLines.map(l => `<div class="summary-row"><span>Article</span><span class="v">${esc(l)}</span></div>`).join("") : `<div class="summary-row"><span>Quantité</span><span class="v">${b.exactQuantity || b.quantity}</span></div>`}
+        <div class="divider-row"><span style="font-size:14px;font-weight:700;">Montant estimé</span><span style="font-size:17px;font-weight:800;color:var(--teal);">${fcfa(estimated)}</span></div>
+        <p style="font-size:11px;color:var(--mutedLight);margin-top:8px;">Le prix définitif sera confirmé après réception par le pressing.</p>
+      </div>
+      ${state.bookingError ? `<div class="error-msg">${esc(state.bookingError)}</div>` : ""}
+      <div class="btn-row"><button class="btn btn-secondary" onclick="bookingStep(1)">Retour</button><button class="btn btn-primary" onclick="bookingConfirm()">${state.bookingSubmitting?'Envoi...':'Confirmer ma réservation'}</button></div>
+    `;
+  }
+  return `<div class="screen">
+    <div class="header-row"><div class="header-left"><button class="back-btn" onclick="clientGo('home')">←</button><div class="header-title">Réserver une collecte</div></div></div>
+    <div class="steps">${steps.map((_,i) => `<div class="bar ${i<=b.step?'done':''}"></div>`).join("")}</div>
+    <div class="step-caption">Étape ${b.step+1} / ${steps.length} · ${steps[b.step]}</div>
+    ${stepHtml}
+  </div>`;
+}
+function setBookingField(k,v){ state.booking[k]=v; render(); }
+function setItemQty(svcId, delta){
+  const cur = state.booking.items[svcId] || 0;
+  const next = Math.max(0, cur + delta);
+  if(next === 0) delete state.booking.items[svcId]; else state.booking.items[svcId] = next;
+  render();
+}
+function bookingStep(n){ state.booking.step = n; render(); }
+async function bookingConfirm(){
+  setState({ bookingSubmitting:true, bookingError:null });
+  const b = state.booking; const cfg = state.clientConfig;
+  try{
+    let pickupAddressId = null;
+    if(b.mode === "domicile"){
+      const zone = cfg.zones.find(z => z.id === b.zoneId);
+      const { data: addr, error: addrErr } = await sb.from("addresses").insert({
+        customer_id: state.profile.id, label:"Domicile", zone_id: b.zoneId || null, quartier: zone?.name, landmark:b.landmark, details:b.address, phone:state.profile.phone
+      }).select().single();
+      if(addrErr) throw addrErr;
+      pickupAddressId = addr.id;
+    }
+    const itemsTotal = Object.entries(b.items).reduce((s,[svcId,qty]) => {
+      const svc = cfg.services.find(x => x.id === svcId);
+      return s + (svc ? svc.price*qty : 0);
+    }, 0);
+    const { data: order, error: orderErr } = await sb.from("orders").insert({
+      customer_id: state.profile.id, pressing_id: state.selectedPressingId, pickup_mode: b.mode, pickup_address_id: pickupAddressId,
+      pickup_date: b.date || todayISO(), pickup_slot_id: b.slotId || null, quantity_estimate: b.quantity,
+      quantity_count: b.exactQuantity ? parseInt(b.exactQuantity,10) : null,
+      estimated_amount: (itemsTotal || 3500)
+    }).select().single();
+    if(orderErr) throw orderErr;
+    const itemRows = Object.entries(b.items).filter(([,q])=>q>0).map(([svcId,qty]) => {
+      const svc = cfg.services.find(x => x.id === svcId);
+      return { order_id: order.id, service_id: svcId, item_name: svc?.name, quantity: qty, unit_price: svc?.price||0, total_price: (svc?.price||0)*qty };
+    });
+    if(itemRows.length) await sb.from("order_items").insert(itemRows);
+    await loadClientOrders();
+    state.activeOrderId = order.id; state.bookingSubmitting = false;
+    setState({ clientScreen: "track" });
+  } catch(e){ setState({ bookingSubmitting:false, bookingError: e.message || "Une erreur est survenue." }); }
+}
+
+function renderTracking(){
+  const order = state.orders.find(o => o.id === state.activeOrderId) || state.orders[0];
+  if(!order) return `<div class="screen"><div class="empty">Aucune commande pour le moment.</div></div>`;
+  if(!state.activeOrderId && state.orders.length > 1){
+    return `<div class="screen"><div class="header-title" style="margin-bottom:12px;">Suivi de commande</div>
+      ${state.orders.map(o => `<div class="order-card" onclick="pickOrder('${o.id}')">
+        <div style="font-size:14px;font-weight:700;">${o.order_number}</div>
+        <div style="font-size:12px;color:var(--muted);">${esc(o.pressings?.name||'')} · ${STATUS_LABELS[o.order_status]}</div>
+      </div>`).join("")}</div>`;
+  }
+  const idx = STATUS_FLOW.indexOf(order.order_status);
+  return `<div class="screen">
+    ${state.orders.length > 1 ? `<button class="btn btn-secondary" style="margin-bottom:12px;" onclick="pickOrder(null)">← Toutes mes commandes</button>` : ""}
+    <div style="margin-bottom:20px;"><div style="font-size:12px;color:var(--mutedLight);">Commande · ${esc(order.pressings?.name||'')}</div><div style="font-size:19px;font-family:'Fraunces',serif;">${order.order_number}</div></div>
+    ${STATUS_FLOW.map((s,i) => {
+      const done = i<=idx, current = i===idx;
+      return `<div style="display:flex;gap:10px;">
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <div style="width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${done?'var(--teal)':'#fff'};border:2px solid ${done?'var(--teal)':'var(--border)'};color:#fff;font-size:11px;">${done?'✓':''}</div>
+          ${i<STATUS_FLOW.length-1 ? `<div style="width:2px;flex:1;min-height:20px;background:${i<idx?'var(--teal)':'var(--border)'};"></div>` : ""}
+        </div>
+        <div style="padding-bottom:16px;font-size:14px;color:${current?'#101828':done?'#374151':'var(--mutedLight)'};font-weight:${current?'700':'400'};">${STATUS_LABELS[s]}</div>
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+function pickOrder(id){ setState({ activeOrderId: id }); }
+function renderHistory(){
+  return `<div class="screen"><div class="header-title" style="margin-bottom:12px;">Historique</div>
+    ${state.orders.length===0 ? `<div class="empty">Aucune commande passée.</div>` :
+      state.orders.map(o => `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:14px;font-weight:700;">${o.order_number}</div><span class="badge">${STATUS_LABELS[o.order_status]}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">${esc(o.pressings?.name||'')} · ${fcfa(o.final_amount || o.estimated_amount)}</div>
+      </div>`).join("")}
+  </div>`;
+}
+
+// =============================== PRESSING ===============================
+async function loadMyPressing(){ const { data } = await sb.from("pressings").select("*").eq("owner_profile_id", state.profile.id).maybeSingle(); state.myPressing = data; }
+async function loadPressingOrders(){ const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false}); state.pressingOrders = data || []; }
+async function loadPressingAgents(){ const { data } = await sb.from("agents").select("*, profiles(full_name)").eq("pressing_id", state.myPressing.id).eq("status","active"); state.pressingAgents = data || []; }
+async function loadMySubscription(){ const { data } = await sb.from("subscriptions").select("*").eq("pressing_id", state.myPressing.id).maybeSingle(); state.mySubscription = data; }
+function attachPressingRealtime(){
+  if(state.realtimeChannel) sb.removeChannel(state.realtimeChannel);
+  state.realtimeChannel = sb.channel("orders-" + state.myPressing.id)
+    .on("postgres_changes", { event:"*", schema:"public", table:"orders", filter:`pressing_id=eq.${state.myPressing.id}` }, async () => { await loadPressingOrders(); render(); })
+    .subscribe();
+}
+
+function renderPressingApp(){
+  if(!state.myPressing) return `<div class="screen"><div class="empty">Aucun pressing n'est encore associé à ce compte.</div></div>`;
+  if(state.campaignsView !== "none") return renderCampaignsHub();
+  if(state.pressingConfigView !== "none") return renderPressingConfig();
+
+  const subInfo = computeSubStatus(state.mySubscription);
+  if(subInfo.status === "suspended" || subInfo.status === "expired"){
+    return `<div class="screen"><div class="banner-danger">
+      <div style="font-weight:700;margin-bottom:6px;">Abonnement ${subInfo.status==='suspended'?'suspendu':'expiré'}</div>
+      <div>L'accès au tableau de bord est bloqué. Contacte l'administrateur de la plateforme pour régulariser le paiement de l'abonnement de "${esc(state.myPressing.name)}".</div>
+    </div></div>`;
+  }
+  let banner = "";
+  if(subInfo.status === "trial" && subInfo.daysLeft <= 5) banner = `<div class="screen" style="padding-bottom:0;"><div class="banner-warning">⏳ Essai gratuit — ${subInfo.daysLeft} jour(s) restant(s) avant le début de l'abonnement.</div></div>`;
+  if(subInfo.status === "active" && subInfo.daysLeft <= 5) banner = `<div class="screen" style="padding-bottom:0;"><div class="banner-warning">⏳ Abonnement — expire dans ${subInfo.daysLeft} jour(s). Pense au renouvellement.</div></div>`;
+
+  if(state.pressingSelectedOrderId){
+    const order = state.pressingOrders.find(o => o.id === state.pressingSelectedOrderId);
+    if(order) return banner + renderPressingOrderDetail(order);
+  }
+  const active = state.pressingOrders.filter(o => !["termine","annule"].includes(o.order_status));
+  return banner + `<div class="screen">
+    <div class="header-row" style="margin-bottom:16px;">
+      <div><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">Aujourd'hui</div><div style="font-size:19px;font-family:'Fraunces',serif;">Tableau de bord</div></div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-secondary" style="width:auto;padding:8px 10px;margin:0;" onclick="openPressingConfig()">⚙️</button>
+        <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="setCampaignsView('list')">📢 Campagnes</button>
+      </div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="val">${active.length}</div><div class="lab">Commandes actives</div></div>
+      <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='collecte_programmee').length}</div><div class="lab">À collecter</div></div>
+      <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='en_traitement').length}</div><div class="lab">En traitement</div></div>
+      <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='pret').length}</div><div class="lab">Prêtes</div></div>
+    </div>
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Commandes</div>
+    ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.</div>` :
+      state.pressingOrders.map(o => `<div class="order-card" onclick="pressingSelect('${o.id}')">
+        <div class="top"><div style="font-size:14px;font-weight:700;">${o.order_number}</div><span style="color:var(--mutedLight);">›</span></div>
+        <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span class="badge">${STATUS_LABELS[o.order_status]}</span><span style="font-size:12px;color:var(--muted);">${fcfa(o.final_amount || o.estimated_amount)}</span>
+        </div>
+      </div>`).join("")}
+  </div>`;
+}
+function pressingSelect(id){ setState({ pressingSelectedOrderId:id }); }
+function pressingBack(){ setState({ pressingSelectedOrderId:null }); }
+function renderPressingOrderDetail(order){
+  return `<div class="screen">
+    <div class="header-row"><div class="header-left"><button class="back-btn" onclick="pressingBack()">←</button><div class="header-title">${order.order_number}</div></div></div>
+    <div style="margin-top:12px;">
+      <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}</div></div></div>
+      <div class="info-row"><div><div class="lab">Quantité</div><div class="val">${order.quantity_count ? order.quantity_count + ' article(s)' : (order.quantity_estimate || "—")}</div></div></div>
+      ${(order.order_items && order.order_items.length) ? `<div class="card"><div class="field-label">Détail</div>${order.order_items.map(it => `<div class="summary-row"><span>${esc(it.item_name||'Article')} ×${it.quantity}</span><span class="v">${fcfa(it.total_price)}</span></div>`).join("")}</div>` : ""}
+      <div class="card"><div class="field-label">Montant final</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="number" value="${order.final_amount || order.estimated_amount || 0}" style="width:110px;" oninput="pendingFinalAmount=this.value" />
+          <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;" onclick="saveFinalAmount('${order.id}')">Enregistrer</button>
+        </div>
+      </div>
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+        <div><div style="font-size:14px;">Agent</div><div style="font-size:12px;color:var(--muted);">${state.pressingAgents.length===0?'Aucun agent':''}</div></div>
+        ${state.pressingAgents.length ? `<div class="chip-row">${state.pressingAgents.map(a => `<button class="chip" onclick="assignAgent('${order.id}','${a.id}')">${esc(a.profiles?.full_name||'Agent')}</button>`).join("")}</div>` : ""}
+      </div>
+      <div class="card"><div style="font-size:14px;margin-bottom:4px;">Statut actuel</div><div style="font-size:14px;font-weight:700;color:var(--teal);">${STATUS_LABELS[order.order_status]}</div></div>
+      ${!["termine","annule"].includes(order.order_status) ? `<button class="btn btn-primary" onclick="pressingAdvance('${order.id}')">Faire avancer → ${STATUS_LABELS[nextStatus(order.order_status)]}</button>` : ""}
+    </div>
+  </div>`;
+}
+let pendingFinalAmount = null;
+async function saveFinalAmount(id){ await sb.from("orders").update({ final_amount: Number(pendingFinalAmount) }).eq("id", id); await loadPressingOrders(); render(); }
+async function assignAgent(orderId, agentId){
+  await sb.from("pickup_requests").insert({ order_id: orderId, agent_id: agentId, scheduled_at: new Date().toISOString() });
+  await sb.from("orders").update({ order_status: "collecte_programmee" }).eq("id", orderId);
+  await loadPressingOrders(); render();
+}
+async function pressingAdvance(id){
+  const order = state.pressingOrders.find(o => o.id === id);
+  const status = nextStatus(order.order_status);
+  await sb.from("orders").update({ order_status: status, updated_at: new Date().toISOString() }).eq("id", id);
+  await sb.from("order_status_history").insert({ order_id:id, status, changed_by: state.profile.id });
+  await loadPressingOrders(); render();
+}
+
+// ---- Configuration pressing (services + créneaux) ----
+async function openPressingConfig(){
+  await loadMyPressingConfig();
+  setState({ pressingConfigView:"main" });
+}
+async function loadMyPressingConfig(){
+  const pid = myPressingId();
+  const [{ data: services }, { data: slots }] = await Promise.all([
+    sb.from("services").select("*").eq("pressing_id", pid).order("created_at"),
+    sb.from("time_slots").select("*").eq("pressing_id", pid).order("start_time"),
+  ]);
+  state.myServices = services || []; state.mySlots = slots || [];
+}
+function renderPressingConfig(){
+  const ds = state.draftService || { name:"", unit:"vêtement", price:"" };
+  const dsl = state.draftSlot || { label:"", start_time:"08:00", end_time:"10:00" };
+  return `<div class="screen">
+    <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
+
+    <div style="font-size:14px;font-weight:700;margin:16px 0 8px;">Services & tarifs</div>
+    ${state.myServices.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun service. Ajoute-en un ci-dessous.</p>` :
+      state.myServices.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+        <div><div style="font-size:14px;font-weight:700;">${esc(s.name)}</div><div style="font-size:12px;color:var(--muted);">${fcfa(s.price)} / ${esc(s.unit)}</div></div>
+        <button class="chip ${s.is_active?'':'active'}" onclick="toggleServiceActive('${s.id}',${s.is_active})">${s.is_active?'Désactiver':'Réactiver'}</button>
+      </div>`).join("")}
+    <div class="card">
+      <div class="field-label">Nouveau service</div>
+      <input type="text" placeholder="Nom (ex: Lavage + repassage)" value="${esc(ds.name)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{name:this.value})" style="margin-bottom:8px;" />
+      <div style="display:flex;gap:8px;">
+        <input type="text" placeholder="Unité (vêtement, kg...)" value="${esc(ds.unit)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{unit:this.value})" style="flex:1;" />
+        <input type="number" placeholder="Prix FCFA" value="${esc(ds.price)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{price:this.value})" style="flex:1;" />
+      </div>
+      <button class="btn btn-primary" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
+    </div>
+
+    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Créneaux de collecte</div>
+    ${state.mySlots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun créneau. Ajoute-en un ci-dessous.</p>` :
+      state.mySlots.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:14px;">${esc(s.label)} <span style="color:var(--muted);font-size:12px;">(${s.start_time.slice(0,5)}–${s.end_time.slice(0,5)})</span></div>
+        <button class="chip ${s.is_active?'':'active'}" onclick="toggleSlotActive('${s.id}',${s.is_active})">${s.is_active?'Désactiver':'Réactiver'}</button>
+      </div>`).join("")}
+    <div class="card">
+      <div class="field-label">Nouveau créneau</div>
+      <input type="text" placeholder="Label (ex: Matin)" value="${esc(dsl.label)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{label:this.value})" style="margin-bottom:8px;" />
+      <div style="display:flex;gap:8px;">
+        <input type="time" value="${esc(dsl.start_time)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{start_time:this.value})" style="flex:1;" />
+        <input type="time" value="${esc(dsl.end_time)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{end_time:this.value})" style="flex:1;" />
+      </div>
+      <button class="btn btn-primary" onclick="addSlotConfig()" style="margin-top:10px;">Ajouter le créneau</button>
+    </div>
+  </div>`;
+}
+function closePressingConfig(){ setState({ pressingConfigView:"none", draftService:null, draftSlot:null }); }
+async function addService(){
+  const d = state.draftService; const pid = myPressingId();
+  if(!d || !d.name || !d.price){ alert("Nom et prix requis."); return; }
+  await sb.from("services").insert({ pressing_id: pid, name:d.name, unit:d.unit||'vêtement', price:parseInt(d.price,10), is_active:true });
+  state.draftService = null;
+  await loadMyPressingConfig(); render();
+}
+async function toggleServiceActive(id, current){
+  await sb.from("services").update({ is_active: !current }).eq("id", id);
+  await loadMyPressingConfig(); render();
+}
+async function addSlotConfig(){
+  const d = state.draftSlot; const pid = myPressingId();
+  if(!d || !d.label){ alert("Label requis."); return; }
+  await sb.from("time_slots").insert({ pressing_id: pid, label:d.label, start_time:d.start_time, end_time:d.end_time, is_active:true });
+  state.draftSlot = null;
+  await loadMyPressingConfig(); render();
+}
+async function toggleSlotActive(id, current){
+  await sb.from("time_slots").update({ is_active: !current }).eq("id", id);
+  await loadMyPressingConfig(); render();
+}
+
+// ---- Campagnes ----
+function setCampaignsView(v){
+  state.campaignsView = v;
+  if(v === "list") loadPressingCampaigns();
+  if(v === "new") state.draftCampaign = { title:"", message:"", campaign_date:"", mode:"domicile", slots:[{zone_label:"",start_time:"07:00",end_time:"09:00"}] };
+  render();
+}
+async function loadPressingCampaigns(){
+  const pid = myPressingId();
+  const { data } = await sb.from("campaigns").select("*, campaign_slots(*)").eq("pressing_id", pid).order("campaign_date",{ascending:false});
+  state.pressingCampaigns = data || [];
+  const ids = (data||[]).map(c=>c.id);
+  state.campaignResponseCounts = {};
+  if(ids.length){
+    const { data: resp } = await sb.from("campaign_responses").select("campaign_id").in("campaign_id", ids);
+    (resp||[]).forEach(r => { state.campaignResponseCounts[r.campaign_id] = (state.campaignResponseCounts[r.campaign_id]||0)+1; });
+  }
+}
+function renderCampaignsHub(){ return state.campaignsView === "new" ? renderNewCampaignForm() : renderPressingCampaignsList(); }
+function renderPressingCampaignsList(){
+  return `<div class="screen">
+    <div class="header-row"><div class="header-title">Campagnes de ramassage</div>
+      <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;" onclick="setCampaignsView('new')">+ Nouvelle</button></div>
+    <p style="font-size:12px;color:var(--muted);margin:8px 0 12px;">Envoie un message programmé à ton réseau de clients (ramassage groupé par quartier/heure). N'empêche pas les commandes spontanées classiques.</p>
+    ${(state.pressingCampaigns||[]).length===0 ? `<div class="empty">Aucune campagne publiée.</div>` :
+      state.pressingCampaigns.map(c => `<div class="card">
+        <div style="font-weight:700;">${esc(c.title)}</div>
+        <div style="font-size:12px;color:var(--muted);margin:2px 0 6px;">${c.campaign_date} · ${(state.campaignResponseCounts[c.id])||0} confirmation(s)</div>
+        <div class="chip-row">${(c.campaign_slots||[]).map(s => `<span class="chip">${esc(s.zone_label)} · ${s.start_time.slice(0,5)}–${s.end_time.slice(0,5)}</span>`).join("")}</div>
+      </div>`).join("")}
+    <button class="btn btn-secondary" style="margin-top:16px;" onclick="setCampaignsView('none')">← Retour</button>
+  </div>`;
+}
+function renderNewCampaignForm(){
+  const d = state.draftCampaign;
+  return `<div class="screen">
+    <div class="header-title" style="margin-bottom:12px;">Nouvelle campagne de ramassage</div>
+    <div class="field"><div class="field-label">Titre</div><input type="text" value="${esc(d.title)}" oninput="state.draftCampaign.title=this.value" placeholder="Ex : Ramassage du quartier" /></div>
+    <div class="field"><div class="field-label">Message aux clients</div><input type="text" value="${esc(d.message)}" oninput="state.draftCampaign.message=this.value" placeholder="Ex : Ramassage prévu mercredi..." /></div>
+    <div class="field"><div class="field-label">Date</div><input type="date" value="${esc(d.campaign_date)}" oninput="state.draftCampaign.campaign_date=this.value" /></div>
+    <div class="field"><div class="field-label">Mode</div>
+      <div class="toggle-row">
+        <button class="toggle-card ${d.mode==='domicile'?'active':''}" onclick="state.draftCampaign.mode='domicile';render()">🏠<br/>À domicile</button>
+        <button class="toggle-card ${d.mode==='point_rdv'?'active':''}" onclick="state.draftCampaign.mode='point_rdv';render()">📍<br/>Point de rendez-vous</button>
+      </div></div>
+    <div class="field"><div class="field-label">Créneaux par quartier</div>
+      ${d.slots.map((s,i) => `<div class="slot-row">
+        <input type="text" value="${esc(s.zone_label)}" placeholder="Quartier (ex: Bastos)" style="flex:2;" oninput="state.draftCampaign.slots[${i}].zone_label=this.value" />
+        <input type="time" value="${esc(s.start_time)}" style="flex:1;" oninput="state.draftCampaign.slots[${i}].start_time=this.value" />
+        <input type="time" value="${esc(s.end_time)}" style="flex:1;" oninput="state.draftCampaign.slots[${i}].end_time=this.value" />
+        <button class="icon-x" onclick="removeSlotRow(${i})">✕</button>
+      </div>`).join("")}
+      <button class="btn btn-secondary" onclick="addSlotRow()">+ Ajouter un quartier/heure</button>
+    </div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="setCampaignsView('list')">Annuler</button><button class="btn btn-primary" onclick="publishCampaign()">Publier</button></div>
+  </div>`;
+}
+function addSlotRow(){ state.draftCampaign.slots.push({zone_label:"",start_time:"07:00",end_time:"09:00"}); render(); }
+function removeSlotRow(i){ state.draftCampaign.slots.splice(i,1); render(); }
+async function publishCampaign(){
+  const d = state.draftCampaign; const pid = myPressingId();
+  try{
+    const { data: camp, error } = await sb.from("campaigns").insert({ pressing_id: pid, created_by: state.profile.id, title:d.title, message:d.message, campaign_date:d.campaign_date, mode:d.mode, status:"published" }).select().single();
+    if(error) throw error;
+    const slots = d.slots.filter(s=>s.zone_label).map(s => ({ campaign_id:camp.id, zone_label:s.zone_label, start_time:s.start_time, end_time:s.end_time }));
+    if(slots.length) await sb.from("campaign_slots").insert(slots);
+    await loadPressingCampaigns();
+    setState({ campaignsView:"list" });
+  } catch(e){ alert("Erreur : " + e.message); }
+}
+
+// =============================== AGENT ===============================
+async function loadMyAgent(){ const { data } = await sb.from("agents").select("*, pressings(name)").eq("id", state.profile.id).maybeSingle(); state.myAgent = data; }
+async function loadMissions(){
+  const [pu, de] = await Promise.all([
+    sb.from("pickup_requests").select("*, orders(*)").eq("agent_id", state.profile.id),
+    sb.from("delivery_requests").select("*, orders(*)").eq("agent_id", state.profile.id),
+  ]);
+  const pickups = (pu.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"collecte" }));
+  const deliveries = (de.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"livraison" }));
+  state.missions = [...pickups, ...deliveries].filter(o => !["termine","annule"].includes(o.order_status));
+}
+function renderAgentApp(){
+  if(!state.myAgent) return `<div class="screen"><div class="empty">Ton compte agent n'est pas encore rattaché à un pressing.</div></div>`;
+  if(state.campaignsView !== "none") return renderCampaignsHub();
+  return `<div class="screen">
+    <div class="header-row" style="margin-bottom:16px;">
+      <div><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">${esc(state.myAgent.pressings?.name||'')}</div><div style="font-size:19px;font-family:'Fraunces',serif;">Mes missions</div></div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="setCampaignsView('list')">📢 Campagnes</button>
+    </div>
+    ${state.missions.length===0 ? `<div class="empty">Aucune mission assignée pour le moment.</div>` :
+      state.missions.map(o => { const isPickup = o.missionType === "collecte"; return `<div class="mission-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div><div class="mission-type" style="color:${isPickup?'var(--teal)':'var(--amber)'};">${o.missionType}</div><div style="font-size:14px;font-weight:700;">${o.order_number}</div></div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:8px;" onclick="agentProgress('${o.id}')">${STATUS_LABELS[nextStatus(o.order_status)]}</button>
+      </div>`; }).join("")}
+  </div>`;
+}
+async function agentProgress(orderId){
+  const order = state.missions.find(o => o.id === orderId);
+  const status = nextStatus(order.order_status);
+  await sb.from("orders").update({ order_status: status, updated_at: new Date().toISOString() }).eq("id", orderId);
+  await sb.from("order_status_history").insert({ order_id:orderId, status, changed_by: state.profile.id });
+  await loadMissions(); render();
+}
+
+// =============================== ADMIN ===============================
+async function loadAdminPressings(){
+  const { data } = await sb.from("pressings").select("*, subscriptions(*)").order("created_at",{ascending:false});
+  state.adminPressings = data || [];
+}
+async function loadAdminOrders(pressingId){
+  const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", pressingId).order("created_at",{ascending:false});
+  state.adminOrders = data || [];
+}
+async function adminSelectPressing(id){ state.adminSelectedPressingId = id; await loadAdminOrders(id); render(); }
+function getSub(p){ return Array.isArray(p.subscriptions) ? p.subscriptions[0] : p.subscriptions; }
+function openPaymentForm(id){ state.paymentFormFor = id; render(); }
+function cancelPaymentForm(){ state.paymentFormFor = null; render(); }
+async function recordPayment(pressingId){
+  const plan = document.getElementById("planSelect-" + pressingId).value;
+  const sub = getSub(state.adminPressings.find(p=>p.id===pressingId));
+  const base = (sub?.current_period_end && new Date(sub.current_period_end) > new Date()) ? new Date(sub.current_period_end) : new Date();
+  const end = new Date(base); end.setDate(end.getDate() + PLAN_DURATIONS[plan]);
+  await sb.from("subscriptions").update({
+    plan, current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
+    manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO()
+  }).eq("pressing_id", pressingId);
+  state.paymentFormFor = null;
+  await loadAdminPressings(); render();
+}
+async function toggleSubscriptionSuspend(pressingId, currentManualStatus){
+  const next = currentManualStatus === "suspended" ? "ok" : "suspended";
+  await sb.from("subscriptions").update({ manual_status: next }).eq("pressing_id", pressingId);
+  await loadAdminPressings(); render();
+}
+async function adminTogglePressingStatus(id, current){
+  await sb.from("pressings").update({ status: current === "active" ? "suspended" : "active" }).eq("id", id);
+  await loadAdminPressings(); render();
+}
+
+function renderAdminApp(){
+  if(state.adminSelectedPressingId){
+    const p = state.adminPressings.find(x => x.id === state.adminSelectedPressingId);
+    return renderAdminPressingDetail(p);
+  }
+  return `<div class="screen">
+    <div style="margin-bottom:16px;"><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">Administration générale</div><div style="font-size:19px;font-family:'Fraunces',serif;">Tous les réseaux pressing</div></div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="val">${state.adminPressings.length}</div><div class="lab">Pressings inscrits</div></div>
+      <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>computeSubStatus(getSub(p)).status==='active').length}</div><div class="lab">Abonnements actifs</div></div>
+    </div>
+    ${state.adminPressings.length===0 ? `<div class="empty">Aucun pressing enregistré.</div>` :
+      state.adminPressings.map(p => {
+        const sub = getSub(p); const info = computeSubStatus(sub);
+        const badgeClass = info.status==='active' ? 'badge' : info.status==='trial' ? 'badge-amber' : 'badge-red';
+        const badgeText = { active:"Actif", trial:"Essai", expired:"Expiré", suspended:"Suspendu", inconnu:"—" }[info.status];
+        return `<div class="card">
+          <div class="header-row" onclick="adminSelectPressing('${p.id}')" style="cursor:pointer;">
+            <div><div style="font-size:14px;font-weight:700;">${esc(p.name)}</div><div style="font-size:12px;color:var(--muted);">${esc(p.phone||'')}</div></div>
+            <span class="badge ${badgeClass}">${badgeText}${info.daysLeft!=null && info.status!=='expired' ? ' · ' + info.daysLeft + 'j' : ''}</span>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+            ${state.paymentFormFor === p.id ? `
+              <select id="planSelect-${p.id}" style="flex:1;">${Object.entries(PLAN_LABELS).map(([k,l]) => `<option value="${k}">${l}</option>`).join("")}</select>
+              <button class="btn btn-primary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="recordPayment('${p.id}')">Confirmer</button>
+              <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="cancelPaymentForm()">Annuler</button>
+            ` : `
+              <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="openPaymentForm('${p.id}')">💳 Paiement</button>
+              <button class="btn ${sub?.manual_status==='suspended'?'btn-primary':'btn-danger'}" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="toggleSubscriptionSuspend('${p.id}','${sub?.manual_status}')">
+                ${sub?.manual_status==='suspended' ? '▶ Réactiver' : '⏸ Suspendre'}
+              </button>
+            `}
+          </div>
+        </div>`;
+      }).join("")}
+  </div>`;
+}
+function renderAdminPressingDetail(p){
+  const revenue = state.adminOrders.reduce((s,o) => s + (o.final_amount || o.estimated_amount || 0), 0);
+  const sub = getSub(p); const info = computeSubStatus(sub);
+  return `<div class="screen">
+    <div class="header-row"><div class="header-left"><button class="back-btn" onclick="setState({adminSelectedPressingId:null})">←</button><div class="header-title">${esc(p.name)}</div></div></div>
+    <div class="card" style="margin-top:12px;">
+      <div style="font-size:13px;color:var(--muted);">Abonnement</div>
+      <div style="font-size:14px;font-weight:700;">${info.status} ${info.daysLeft!=null?`(${info.daysLeft} j)`:''}</div>
+      ${sub?.last_payment_at ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Dernier paiement : ${sub.last_payment_at} · ${fcfa(sub.last_payment_amount)}</div>` : ""}
+    </div>
+    <div class="stat-grid" style="margin-top:12px;">
+      <div class="stat-card"><div class="val">${state.adminOrders.length}</div><div class="lab">Commandes</div></div>
+      <div class="stat-card"><div class="val">${fcfa(revenue)}</div><div class="lab">CA (est./final)</div></div>
+    </div>
+    <button class="btn ${p.status==='active'?'btn-danger':'btn-primary'}" onclick="adminTogglePressingStatus('${p.id}','${p.status}')">${p.status==='active' ? 'Désactiver ce compte pressing' : 'Réactiver ce compte pressing'}</button>
+    <div style="font-size:14px;font-weight:700;margin:16px 0 8px;">Commandes</div>
+    ${state.adminOrders.length===0 ? `<div class="empty">Aucune commande.</div>` :
+      state.adminOrders.map(o => `<div class="card">
+        <div style="display:flex;justify-content:space-between;"><span style="font-weight:700;font-size:14px;">${o.order_number}</span><span class="badge">${STATUS_LABELS[o.order_status]}</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">${fcfa(o.final_amount || o.estimated_amount)}</div>
+      </div>`).join("")}
+  </div>`;
+}
+
+// =============================== PWA ===============================
+function registerServiceWorker(){
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+}
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const fab = document.createElement('div');
+  fab.className = 'install-fab'; fab.id = 'installFab'; fab.textContent = "📲 Installer l'app";
+  fab.onclick = async () => { fab.remove(); deferredInstallPrompt.prompt(); };
+  document.body.appendChild(fab);
+});
+
+init();
+</script>
+</body>
+</html>
