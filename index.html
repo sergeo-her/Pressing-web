@@ -13,8 +13,9 @@
 <style>
   :root{ --ink:#141F36; --ink2:#1E3358; --teal:#0EA5A0; --amber:#F0AC3D; --bg:#F5F6F8; --border:#E7E9EE; --muted:#667085; --mutedLight:#9AA2B1; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:15px; color:#101828; }
-  #app{ max-width:440px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(20,31,54,.06); position:relative; padding-bottom:64px; overflow-x:hidden; }
+  html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+  body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:16.5px; line-height:1.5; color:#101828; }
+  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(20,31,54,.06); position:relative; padding-bottom:68px; overflow-x:hidden; }
   h1,h2,h3{ font-family:'Fraunces',Georgia,serif; margin:0; }
   a{ text-decoration:none; color:inherit; }
   button{ font-family:inherit; cursor:pointer; border:none; background:none; }
@@ -796,8 +797,9 @@ async function loadMyPressingConfig(){
   state.myServices = services || []; state.mySlots = slots || [];
 }
 function renderPressingConfig(){
-  const ds = state.draftService || { name:"", unit:"vêtement", price:"" };
-  const dsl = state.draftSlot || { label:"", start_time:"08:00", end_time:"10:00" };
+  if(!state.draftService) state.draftService = { name:"", unit:"vêtement", price:"" };
+  if(!state.draftSlot) state.draftSlot = { label:"", start_time:"08:00", end_time:"10:00" };
+  const ds = state.draftService; const dsl = state.draftSlot;
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
 
@@ -809,10 +811,10 @@ function renderPressingConfig(){
       </div>`).join("")}
     <div class="card">
       <div class="field-label">Nouveau service</div>
-      <input type="text" placeholder="Nom (ex: Lavage + repassage)" value="${esc(ds.name)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{name:this.value})" style="margin-bottom:8px;" />
+      <input type="text" placeholder="Nom (ex: Lavage + repassage)" value="${esc(ds.name)}" oninput="state.draftService.name=this.value" style="margin-bottom:8px;" />
       <div style="display:flex;gap:8px;">
-        <input type="text" placeholder="Unité (vêtement, kg...)" value="${esc(ds.unit)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{unit:this.value})" style="flex:1;" />
-        <input type="number" placeholder="Prix FCFA" value="${esc(ds.price)}" oninput="state.draftService=Object.assign({},state.draftService||${JSON.stringify(ds)},{price:this.value})" style="flex:1;" />
+        <input type="text" placeholder="Unité (vêtement, kg...)" value="${esc(ds.unit)}" oninput="state.draftService.unit=this.value" style="flex:1;" />
+        <input type="number" placeholder="Prix FCFA" value="${esc(ds.price)}" oninput="state.draftService.price=this.value" style="flex:1;" />
       </div>
       <button class="btn btn-primary" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
     </div>
@@ -825,10 +827,10 @@ function renderPressingConfig(){
       </div>`).join("")}
     <div class="card">
       <div class="field-label">Nouveau créneau</div>
-      <input type="text" placeholder="Label (ex: Matin)" value="${esc(dsl.label)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{label:this.value})" style="margin-bottom:8px;" />
+      <input type="text" placeholder="Label (ex: Matin)" value="${esc(dsl.label)}" oninput="state.draftSlot.label=this.value" style="margin-bottom:8px;" />
       <div style="display:flex;gap:8px;">
-        <input type="time" value="${esc(dsl.start_time)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{start_time:this.value})" style="flex:1;" />
-        <input type="time" value="${esc(dsl.end_time)}" oninput="state.draftSlot=Object.assign({},state.draftSlot||${JSON.stringify(dsl)},{end_time:this.value})" style="flex:1;" />
+        <input type="time" value="${esc(dsl.start_time)}" oninput="state.draftSlot.start_time=this.value" style="flex:1;" />
+        <input type="time" value="${esc(dsl.end_time)}" oninput="state.draftSlot.end_time=this.value" style="flex:1;" />
       </div>
       <button class="btn btn-primary" onclick="addSlotConfig()" style="margin-top:10px;">Ajouter le créneau</button>
     </div>
@@ -1076,6 +1078,51 @@ window.addEventListener('beforeinstallprompt', (e) => {
   fab.onclick = async () => { fab.remove(); deferredInstallPrompt.prompt(); };
   document.body.appendChild(fab);
 });
+
+// =============================== BOUTON RETOUR NATIF ===============================
+// Chaque navigation "vers l'avant" dans l'app pousse une entrée d'historique factice ;
+// le bouton retour du téléphone/navigateur déclenche popstate, qu'on intercepte pour
+// reculer d'un écran dans l'app plutôt que de quitter la page.
+function pushNav(){ try{ history.pushState({ appNav:true }, "", location.href); }catch(e){} }
+
+function handlePopState(){
+  if(state.notifOpen){ state.notifOpen = false; render(); return; }
+  if(state.view !== "app") return;
+  const role = state.profile?.role;
+  if(role === "client"){
+    if(state.clientScreen === "book" && state.booking && state.booking.step > 0){ state.booking.step--; render(); return; }
+    if(state.clientScreen !== "home" && state.clientScreen !== "choosePressing"){ state.clientScreen = "home"; render(); return; }
+    if(state.clientScreen === "home"){ state.clientScreen = "choosePressing"; render(); return; }
+  }
+  if(role === "pressing"){
+    if(state.pressingConfigView !== "none"){ state.pressingConfigView = "none"; render(); return; }
+    if(state.campaignsView === "new"){ state.campaignsView = "list"; render(); return; }
+    if(state.campaignsView === "list"){ state.campaignsView = "none"; render(); return; }
+    if(state.pressingSelectedOrderId){ state.pressingSelectedOrderId = null; render(); return; }
+  }
+  if(role === "agent"){
+    if(state.campaignsView === "new"){ state.campaignsView = "list"; render(); return; }
+    if(state.campaignsView === "list"){ state.campaignsView = "none"; render(); return; }
+  }
+  if(role === "admin"){
+    if(state.adminSelectedPressingId){ state.adminSelectedPressingId = null; render(); return; }
+  }
+}
+window.addEventListener("popstate", handlePopState);
+
+// Points d'entrée "vers l'avant" qui doivent pouvoir être annulés par le bouton retour :
+const _clientGo = clientGo;
+clientGo = async function(screen){ pushNav(); return _clientGo(screen); };
+const _bookingStep = bookingStep;
+bookingStep = function(n){ if(n > (state.booking?.step||0)) pushNav(); return _bookingStep(n); };
+const _setCampaignsView = setCampaignsView;
+setCampaignsView = function(v){ if(v !== "none") pushNav(); return _setCampaignsView(v); };
+const _openPressingConfig = openPressingConfig;
+openPressingConfig = async function(){ pushNav(); return _openPressingConfig(); };
+const _pressingSelect = pressingSelect;
+pressingSelect = function(id){ pushNav(); return _pressingSelect(id); };
+const _adminSelectPressing = adminSelectPressing;
+adminSelectPressing = async function(id){ pushNav(); return _adminSelectPressing(id); };
 
 init();
 </script>
