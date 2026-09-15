@@ -196,10 +196,10 @@ function freshState(){
 
     pressingsList:[], selectedPressingId:null, clientConfig:null, clientScreen:"choosePressing",
     orders:[], activeOrderId:null, booking:null, bookingError:null, bookingSubmitting:false,
-    clientCampaigns:[], confirmedCampaigns:{},
+    clientCampaigns:[], confirmedCampaigns:{}, featuredReviews:[], reviewFormOpen:false, draftReview:null,
 
     myPressing:null, pressingOrders:[], pressingAgents:[], pressingSelectedOrderId:null, realtimeChannel:null,
-    mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], draftService:null, draftSlot:null,
+    mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], myDeliverySlots:[], myReviews:[], draftService:null, draftSlot:null, draftDeliverySlot:null,
 
     myAgent:null, missions:[],
 
@@ -459,6 +459,7 @@ async function loadClientCampaigns(pressingId){
 
 function renderClientApp(){
   if(state.clientScreen === "choosePressing") return renderChoosePressing();
+  if(state.reviewFormOpen) return renderReviewForm();
   const content = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory }[state.clientScreen]();
   return renderTopTabs() + content + renderBottomNav();
 }
@@ -482,15 +483,22 @@ async function selectPressing(id){
   state.selectedPressingId = id;
   const pressing = state.pressingsList.find(p => p.id === id);
   await enrollInNetwork(id);
-  const [{ data: zones }, { data: services }, { data: slots }] = await Promise.all([
+  const [{ data: zones }, { data: services }, { data: allSlots }] = await Promise.all([
     sb.from("zones").select("*").eq("is_active", true).order("name"),
     sb.from("services").select("*").eq("pressing_id", id).eq("is_active", true).order("name"),
     sb.from("time_slots").select("*").eq("pressing_id", id).eq("is_active", true).order("start_time"),
   ]);
-  state.clientConfig = { pressing, zones: zones||[], services: services||[], slots: slots||[] };
-  state.booking = { step:0, mode:"domicile", zoneId:(zones&&zones[0]?.id)||"", address:"", landmark:"", date:"", slotId:(slots&&slots[0]?.id)||"", items:{}, quantity:"6–10", exactQuantity:"", recurring:false };
+  const slots = (allSlots||[]).filter(s => (s.kind||'pickup') === 'pickup');
+  const deliverySlots = (allSlots||[]).filter(s => s.kind === 'delivery');
+  state.clientConfig = { pressing, zones: zones||[], services: services||[], slots, deliverySlots };
+  state.booking = { step:0, mode:"domicile", zoneId:(zones&&zones[0]?.id)||"", address:"", landmark:"", date:"", slotId:(slots[0]?.id)||"", deliverySlotId:"", items:{}, quantity:"6–10", exactQuantity:"", recurring:false };
   await loadClientCampaigns(id);
+  await loadFeaturedReviews(id);
   setState({ clientScreen:"home" });
+}
+async function loadFeaturedReviews(pressingId){
+  const { data } = await sb.from("reviews").select("*").eq("pressing_id", pressingId).eq("featured", true).order("created_at",{ascending:false}).limit(6);
+  state.featuredReviews = data || [];
 }
 function renderBottomNav(){
   const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["history","Historique","🔁"]];
@@ -505,6 +513,7 @@ async function clientGo(screen){
 
 function renderClientHome(){
   const pName = state.clientConfig?.pressing?.name || "";
+  const pPhone = state.clientConfig?.pressing?.phone || "";
   return `
   <div class="hero">
     <div class="tag">Pressing connecté${pName ? " · " + esc(pName) : ""}</div>
@@ -515,8 +524,43 @@ function renderClientHome(){
   </div>
   ${renderCampaignsForClient()}
   <div class="screen">
+    ${pPhone ? `<a class="wa-btn" href="tel:${pPhone}" style="margin-bottom:8px;">☎ Appeler le pressing · ${esc(pPhone)}</a>` : ""}
     <a class="wa-btn" href="https://wa.me/${(state.clientConfig?.pressing?.whatsapp||'').replace(/\D/g,'')}" target="_blank">💬 Contacter le pressing sur WhatsApp</a>
+  </div>
+  ${renderReviewsForClient()}
+  `;
+}
+function renderReviewsForClient(){
+  const reviews = state.featuredReviews || [];
+  return `<div class="screen" style="padding-top:6px;">
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px;">⭐ Avis de nos clients</div>
+    ${reviews.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:10px;">Pas encore d'avis mis en avant.</p>` :
+      reviews.map(r => `<div class="card"><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</div>${r.comment ? `<div style="font-size:13px;color:var(--muted);margin-top:4px;">${esc(r.comment)}</div>` : ""}</div>`).join("")}
+    <button class="btn btn-secondary" onclick="openReviewForm()">Donner mon avis sur ce pressing</button>
   </div>`;
+}
+function openReviewForm(){
+  if(!state.draftReview) state.draftReview = { rating:5, comment:"" };
+  setState({ reviewFormOpen:true });
+}
+function renderReviewForm(){
+  const d = state.draftReview || { rating:5, comment:"" };
+  return `<div class="screen">
+    <div class="header-title" style="margin-bottom:12px;">Ton avis compte</div>
+    <div class="field"><div class="field-label">Note</div>
+      <div class="chip-row">${[1,2,3,4,5].map(n => `<button class="chip ${d.rating===n?'active':''}" onclick="state.draftReview.rating=${n};render()">${n} ⭐</button>`).join("")}</div>
+    </div>
+    <div class="field"><div class="field-label">Commentaire (optionnel)</div>
+      <input type="text" value="${esc(d.comment)}" oninput="state.draftReview.comment=this.value" placeholder="Ton expérience avec ce pressing..." /></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="setState({reviewFormOpen:false})">Annuler</button><button class="btn btn-primary" onclick="submitReview()">Envoyer</button></div>
+  </div>`;
+}
+async function submitReview(){
+  const d = state.draftReview;
+  await sb.from("reviews").insert({ pressing_id: state.selectedPressingId, customer_id: state.profile.id, rating: d.rating, comment: d.comment || null });
+  state.draftReview = null;
+  state.reviewFormOpen = false;
+  render();
 }
 function renderCampaignsForClient(){
   if(!state.clientCampaigns || state.clientCampaigns.length===0) return "";
@@ -573,9 +617,26 @@ function renderBookingFlow(){
         <div class="field"><div class="field-label">Point de repère (optionnel)</div><input type="text" value="${esc(b.landmark)}" placeholder="Ex : portail bleu" oninput="state.booking.landmark=this.value" /></div>
       ` : `<div class="card">Le point de rendez-vous te sera communiqué par le pressing après confirmation.</div>`}
       <div class="field"><div class="field-label">Date de collecte</div><input type="date" value="${esc(b.date)}" oninput="state.booking.date=this.value" /></div>
-      <div class="field"><div class="field-label">Créneau</div>
-        ${cfg.slots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Ce pressing n'a pas encore configuré de créneau — ta demande sera traitée sans créneau fixe.</p>` :
-          cfg.slots.map(sl => `<div class="radio-row ${b.slotId===sl.id?'active':''}" onclick="setBookingField('slotId','${sl.id}')"><span>⏰ ${esc(sl.label)}</span><span class="radio-dot"><span></span></span></div>`).join("")}
+      <div class="field"><div class="field-label">Créneau proposé par le pressing</div>
+        ${cfg.slots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Ce pressing n'a pas encore configuré de créneau — ta demande sera traitée comme une demande classique, sans créneau fixe.</p>` : `
+          <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Coche le créneau qui te convient (quartier + heure), ou passe une demande classique sans créneau fixe.</p>
+          ${cfg.slots.map(sl => `<div class="radio-row ${b.slotId===sl.id?'active':''}" onclick="setBookingField('slotId','${sl.id}')">
+            <span>${b.slotId===sl.id?'☑':'☐'} <b>${esc(sl.label)}</b>${sl.zone_label ? ' — ' + esc(sl.zone_label) : ''} · ${sl.start_time.slice(0,5)}–${sl.end_time.slice(0,5)}${sl.landmark ? `<br/><span style="font-size:12px;color:var(--muted);margin-left:20px;">${esc(sl.landmark)}</span>` : ''}</span>
+          </div>`).join("")}
+          <div class="radio-row ${!b.slotId?'active':''}" onclick="setBookingField('slotId','')">
+            <span>${!b.slotId?'☑':'☐'} Sans créneau fixe (demande classique)</span>
+          </div>
+        `}
+      </div>
+      <div class="field"><div class="field-label">Créneau de livraison souhaité</div>
+        ${cfg.deliverySlots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Ce pressing n'a pas encore configuré de créneau de livraison — il te contactera pour convenir de l'heure.</p>` : `
+          ${cfg.deliverySlots.map(sl => `<div class="radio-row ${b.deliverySlotId===sl.id?'active':''}" onclick="setBookingField('deliverySlotId','${sl.id}')">
+            <span>${b.deliverySlotId===sl.id?'☑':'☐'} <b>${esc(sl.label)}</b>${sl.zone_label ? ' — ' + esc(sl.zone_label) : ''} · ${sl.start_time.slice(0,5)}–${sl.end_time.slice(0,5)}${sl.landmark ? `<br/><span style="font-size:12px;color:var(--muted);margin-left:20px;">${esc(sl.landmark)}</span>` : ''}</span>
+          </div>`).join("")}
+          <div class="radio-row ${!b.deliverySlotId?'active':''}" onclick="setBookingField('deliverySlotId','')">
+            <span>${!b.deliverySlotId?'☑':'☐'} Sans créneau fixe</span>
+          </div>
+        `}
       </div>
       <button class="btn btn-primary" onclick="bookingStep(1)">Continuer</button>
     `;
@@ -651,7 +712,7 @@ async function bookingConfirm(){
     }, 0);
     const { data: order, error: orderErr } = await sb.from("orders").insert({
       customer_id: state.profile.id, pressing_id: state.selectedPressingId, pickup_mode: b.mode, pickup_address_id: pickupAddressId,
-      pickup_date: b.date || todayISO(), pickup_slot_id: b.slotId || null, quantity_estimate: b.quantity,
+      pickup_date: b.date || todayISO(), pickup_slot_id: b.slotId || null, delivery_slot_id: b.deliverySlotId || null, quantity_estimate: b.quantity,
       quantity_count: b.exactQuantity ? parseInt(b.exactQuantity,10) : null,
       estimated_amount: (itemsTotal || 3500)
     }).select().single();
@@ -708,7 +769,17 @@ function renderHistory(){
 
 // =============================== PRESSING ===============================
 async function loadMyPressing(){ const { data } = await sb.from("pressings").select("*").eq("owner_profile_id", state.profile.id).maybeSingle(); state.myPressing = data; }
-async function loadPressingOrders(){ const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false}); state.pressingOrders = data || []; }
+async function loadPressingOrders(){
+  const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false});
+  const orders = data || [];
+  const custIds = [...new Set(orders.map(o => o.customer_id).filter(Boolean))];
+  if(custIds.length){
+    const { data: profs } = await sb.from("profiles").select("id,full_name,phone").in("id", custIds);
+    const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
+    orders.forEach(o => { o.customer = byId[o.customer_id] || null; });
+  }
+  state.pressingOrders = orders;
+}
 async function loadPressingAgents(){ const { data } = await sb.from("agents").select("*, profiles(full_name)").eq("pressing_id", state.myPressing.id).eq("status","active"); state.pressingAgents = data || []; }
 async function loadMySubscription(){ const { data } = await sb.from("subscriptions").select("*").eq("pressing_id", state.myPressing.id).maybeSingle(); state.mySubscription = data; }
 function attachPressingRealtime(){
@@ -756,7 +827,7 @@ function renderPressingApp(){
     <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Commandes</div>
     ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.</div>` :
       state.pressingOrders.map(o => `<div class="order-card" onclick="pressingSelect('${o.id}')">
-        <div class="top"><div style="font-size:14px;font-weight:700;">${o.order_number}</div><span style="color:var(--mutedLight);">›</span></div>
+        <div class="top"><div><div style="font-size:14px;font-weight:700;">${o.order_number}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div><span style="color:var(--mutedLight);">›</span></div>
         <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
           <span class="badge">${STATUS_LABELS[o.order_status]}</span><span style="font-size:12px;color:var(--muted);">${fcfa(o.final_amount || o.estimated_amount)}</span>
         </div>
@@ -769,6 +840,9 @@ function renderPressingOrderDetail(order){
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="pressingBack()">←</button><div class="header-title">${order.order_number}</div></div></div>
     <div style="margin-top:12px;">
+      <div class="info-row"><div style="flex:1;"><div class="lab">Client</div><div class="val">${esc(order.customer?.full_name || '—')}</div></div>
+        ${order.customer?.phone ? `<a href="tel:${order.customer.phone}" class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;">☎ ${esc(order.customer.phone)}</a>` : ""}
+      </div>
       <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}</div></div></div>
       <div class="info-row"><div><div class="lab">Quantité</div><div class="val">${order.quantity_count ? order.quantity_count + ' article(s)' : (order.quantity_estimate || "—")}</div></div></div>
       ${(order.order_items && order.order_items.length) ? `<div class="card"><div class="field-label">Détail</div>${order.order_items.map(it => `<div class="summary-row"><span>${esc(it.item_name||'Article')} ×${it.quantity}</span><span class="v">${fcfa(it.total_price)}</span></div>`).join("")}</div>` : ""}
@@ -813,12 +887,42 @@ async function loadMyPressingConfig(){
     sb.from("services").select("*").eq("pressing_id", pid).order("created_at"),
     sb.from("time_slots").select("*").eq("pressing_id", pid).order("start_time"),
   ]);
-  state.myServices = services || []; state.mySlots = slots || [];
+  state.myServices = services || [];
+  state.mySlots = (slots||[]).filter(s => (s.kind||'pickup') === 'pickup');
+  state.myDeliverySlots = (slots||[]).filter(s => s.kind === 'delivery');
+  await loadMyReviews();
+}
+async function loadMyReviews(){
+  const pid = myPressingId();
+  const { data } = await sb.from("reviews").select("*").eq("pressing_id", pid).order("created_at",{ascending:false});
+  state.myReviews = data || [];
+}
+function renderSlotList(list, kindLabel){
+  if(list.length===0) return `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun créneau de ${kindLabel}. Ajoute-en un ci-dessous.</p>`;
+  return list.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+    <div><div style="font-size:14px;font-weight:600;">${esc(s.label)}${s.zone_label ? ' · ' + esc(s.zone_label) : ''}</div>
+      <div style="color:var(--muted);font-size:12px;">${s.start_time.slice(0,5)}–${s.end_time.slice(0,5)}${s.landmark ? ' · ' + esc(s.landmark) : ''}</div></div>
+    <button class="chip ${s.is_active?'':'active'}" onclick="toggleSlotActive('${s.id}',${s.is_active})">${s.is_active?'Désactiver':'Réactiver'}</button>
+  </div>`).join("");
+}
+function renderSlotForm(kind, draft){
+  return `<div class="card">
+    <div class="field-label">Nouveau créneau de ${kind==='pickup'?'collecte':'livraison'}</div>
+    <input type="text" placeholder="Label (ex: Tournée du matin)" value="${esc(draft.label)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.label=this.value" style="margin-bottom:8px;" />
+    <input type="text" placeholder="Quartier (ex: Bastos, Messassi...)" value="${esc(draft.zone_label)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.zone_label=this.value" style="margin-bottom:8px;" />
+    <input type="text" placeholder="Point de repère (optionnel)" value="${esc(draft.landmark)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.landmark=this.value" style="margin-bottom:8px;" />
+    <div style="display:flex;gap:8px;">
+      <input type="time" value="${esc(draft.start_time)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.start_time=this.value" style="flex:1;" />
+      <input type="time" value="${esc(draft.end_time)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.end_time=this.value" style="flex:1;" />
+    </div>
+    <button class="btn btn-primary" onclick="addSlotConfig('${kind}')" style="margin-top:10px;">Ajouter le créneau</button>
+  </div>`;
 }
 function renderPressingConfig(){
   if(!state.draftService) state.draftService = { name:"", unit:"vêtement", price:"" };
-  if(!state.draftSlot) state.draftSlot = { label:"", start_time:"08:00", end_time:"10:00" };
-  const ds = state.draftService; const dsl = state.draftSlot;
+  if(!state.draftSlot) state.draftSlot = { label:"", zone_label:"", landmark:"", start_time:"08:00", end_time:"10:00" };
+  if(!state.draftDeliverySlot) state.draftDeliverySlot = { label:"", zone_label:"", landmark:"", start_time:"17:00", end_time:"19:00" };
+  const ds = state.draftService;
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
 
@@ -838,24 +942,29 @@ function renderPressingConfig(){
       <button class="btn btn-primary" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
     </div>
 
-    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Créneaux de collecte</div>
-    ${state.mySlots.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun créneau. Ajoute-en un ci-dessous.</p>` :
-      state.mySlots.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:14px;">${esc(s.label)} <span style="color:var(--muted);font-size:12px;">(${s.start_time.slice(0,5)}–${s.end_time.slice(0,5)})</span></div>
-        <button class="chip ${s.is_active?'':'active'}" onclick="toggleSlotActive('${s.id}',${s.is_active})">${s.is_active?'Désactiver':'Réactiver'}</button>
+    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">📥 Créneaux de collecte par quartier</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Le client voit ces créneaux et coche celui qui lui convient pour venir chercher son linge.</p>
+    ${renderSlotList(state.mySlots, "collecte")}
+    ${renderSlotForm("pickup", state.draftSlot)}
+
+    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">📤 Créneaux de livraison par quartier</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Le client coche le créneau qui lui convient pour la remise de son linge propre.</p>
+    ${renderSlotList(state.myDeliverySlots, "livraison")}
+    ${renderSlotForm("delivery", state.draftDeliverySlot)}
+
+    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Avis clients</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Choisis les avis à mettre en avant sur l'accueil de tes clients.</p>
+    ${(state.myReviews||[]).length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Aucun avis pour le moment.</p>` :
+      state.myReviews.map(r => `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</div>
+            ${r.comment ? `<div style="font-size:13px;color:var(--muted);margin-top:4px;">${esc(r.comment)}</div>` : ""}</div>
+          <button class="chip ${r.featured?'active':''}" onclick="toggleReviewFeatured('${r.id}',${r.featured})">${r.featured?'Mis en avant':'Mettre en avant'}</button>
+        </div>
       </div>`).join("")}
-    <div class="card">
-      <div class="field-label">Nouveau créneau</div>
-      <input type="text" placeholder="Label (ex: Matin)" value="${esc(dsl.label)}" oninput="state.draftSlot.label=this.value" style="margin-bottom:8px;" />
-      <div style="display:flex;gap:8px;">
-        <input type="time" value="${esc(dsl.start_time)}" oninput="state.draftSlot.start_time=this.value" style="flex:1;" />
-        <input type="time" value="${esc(dsl.end_time)}" oninput="state.draftSlot.end_time=this.value" style="flex:1;" />
-      </div>
-      <button class="btn btn-primary" onclick="addSlotConfig()" style="margin-top:10px;">Ajouter le créneau</button>
-    </div>
   </div>`;
 }
-function closePressingConfig(){ setState({ pressingConfigView:"none", draftService:null, draftSlot:null }); }
+function closePressingConfig(){ setState({ pressingConfigView:"none", draftService:null, draftSlot:null, draftDeliverySlot:null }); }
 async function addService(){
   const d = state.draftService; const pid = myPressingId();
   if(!d || !d.name || !d.price){ alert("Nom et prix requis."); return; }
@@ -867,16 +976,21 @@ async function toggleServiceActive(id, current){
   await sb.from("services").update({ is_active: !current }).eq("id", id);
   await loadMyPressingConfig(); render();
 }
-async function addSlotConfig(){
-  const d = state.draftSlot; const pid = myPressingId();
+async function addSlotConfig(kind){
+  const d = kind === "pickup" ? state.draftSlot : state.draftDeliverySlot;
+  const pid = myPressingId();
   if(!d || !d.label){ alert("Label requis."); return; }
-  await sb.from("time_slots").insert({ pressing_id: pid, label:d.label, start_time:d.start_time, end_time:d.end_time, is_active:true });
-  state.draftSlot = null;
+  await sb.from("time_slots").insert({ pressing_id: pid, kind, label:d.label, zone_label:d.zone_label||null, landmark:d.landmark||null, start_time:d.start_time, end_time:d.end_time, is_active:true });
+  if(kind === "pickup") state.draftSlot = null; else state.draftDeliverySlot = null;
   await loadMyPressingConfig(); render();
 }
 async function toggleSlotActive(id, current){
   await sb.from("time_slots").update({ is_active: !current }).eq("id", id);
   await loadMyPressingConfig(); render();
+}
+async function toggleReviewFeatured(id, current){
+  await sb.from("reviews").update({ featured: !current }).eq("id", id);
+  await loadMyReviews(); render();
 }
 
 // ---- Campagnes ----
@@ -959,7 +1073,14 @@ async function loadMissions(){
   ]);
   const pickups = (pu.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"collecte" }));
   const deliveries = (de.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"livraison" }));
-  state.missions = [...pickups, ...deliveries].filter(o => !["termine","annule"].includes(o.order_status));
+  const missions = [...pickups, ...deliveries].filter(o => !["termine","annule"].includes(o.order_status));
+  const custIds = [...new Set(missions.map(m => m.customer_id).filter(Boolean))];
+  if(custIds.length){
+    const { data: profs } = await sb.from("profiles").select("id,full_name,phone").in("id", custIds);
+    const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
+    missions.forEach(m => { m.customer = byId[m.customer_id] || null; });
+  }
+  state.missions = missions;
 }
 function renderAgentApp(){
   if(!state.myAgent) return `<div class="screen"><div class="empty">Ton compte agent n'est pas encore rattaché à un pressing.</div></div>`;
@@ -972,7 +1093,9 @@ function renderAgentApp(){
     ${state.missions.length===0 ? `<div class="empty">Aucune mission assignée pour le moment.</div>` :
       state.missions.map(o => { const isPickup = o.missionType === "collecte"; return `<div class="mission-card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div><div class="mission-type" style="color:${isPickup?'var(--teal)':'var(--amber)'};">${o.missionType}</div><div style="font-size:14px;font-weight:700;">${o.order_number}</div></div>
+          <div><div class="mission-type" style="color:${isPickup?'var(--teal)':'var(--amber)'};">${o.missionType}</div><div style="font-size:14px;font-weight:700;">${o.order_number}</div>
+            <div style="font-size:13px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div>
+          ${o.customer?.phone ? `<a href="tel:${o.customer.phone}" class="btn btn-secondary" style="width:auto;padding:7px 12px;margin:0;font-size:12px;">☎ Appeler</a>` : ""}
         </div>
         <button class="btn btn-primary" style="margin-top:8px;" onclick="agentProgress('${o.id}')">${STATUS_LABELS[nextStatus(o.order_status)]}</button>
       </div>`; }).join("")}
