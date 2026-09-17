@@ -8,6 +8,9 @@
 <link rel="manifest" href="/manifest.json" />
 <link rel="apple-touch-icon" href="/icon-192.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://xlcobwacbrrxrgrqpbtj.supabase.co">
+<link rel="preconnect" href="https://images.unsplash.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500..700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
@@ -15,7 +18,7 @@
   *{ box-sizing:border-box; }
   html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
   body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:17px; line-height:1.55; color:var(--ink); }
-  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(15,23,42,.06); position:relative; padding-bottom:70px; overflow-x:hidden; }
+  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(15,23,42,.06); position:relative; padding-bottom:84px; overflow-x:hidden; }
   @media (min-width:641px){ #app{ max-width:720px; padding-bottom:24px; } .bottom-nav{ display:none; } .top-tabs{ display:flex !important; } }
   @media (min-width:1025px){ #app{ max-width:960px; box-shadow:0 0 60px rgba(15,23,42,.08); } }
   h1,h2,h3{ font-family:'Fraunces',Georgia,serif; margin:0; }
@@ -27,7 +30,7 @@
   @media (min-width:641px){ .screen{ padding:26px 40px; } }
   .hero{
     background:linear-gradient(160deg, rgba(15,23,42,.94) 0%, rgba(15,23,42,.80) 55%, rgba(22,163,74,.55) 100%),
-      url('https://images.unsplash.com/photo-1545173168-9f1947eebb7f?q=80&w=1200&auto=format&fit=crop') center/cover;
+      url('https://images.unsplash.com/photo-1545173168-9f1947eebb7f?q=45&w=640&auto=format&fit=crop') center/cover;
     color:#fff; padding:40px 24px 46px; position:relative; overflow:hidden; animation:fadeIn .4s ease;
   }
   @media (min-width:641px){ .hero{ padding:64px 44px 70px; } }
@@ -94,9 +97,9 @@
   .info-row .lab{ font-size:12px; color:var(--mutedLight); font-weight:600; }
   .info-row .val{ font-size:15px; margin-top:2px; }
   .empty{ text-align:center; padding:48px 20px; font-size:15px; color:var(--mutedLight); }
-  .bottom-nav{ position:fixed; bottom:0; width:100%; max-width:480px; left:50%; transform:translateX(-50%); border-top:1.5px solid #EEF1F0; background:#fff; display:flex; box-shadow:0 -4px 18px rgba(15,23,42,.05); z-index:25; }
-  .bottom-nav button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:11px 0; color:var(--mutedLight); font-size:11px; font-weight:700; transition:color .15s; }
-  .bottom-nav button.active{ color:var(--brand); }
+  .bottom-nav{ position:fixed; bottom:14px; width:calc(100% - 32px); max-width:448px; left:50%; transform:translateX(-50%); border-radius:22px; background:var(--ink); display:flex; box-shadow:0 10px 30px rgba(15,23,42,.35); z-index:25; padding:4px; }
+  .bottom-nav button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:10px 0; color:rgba(255,255,255,.55); font-size:10.5px; font-weight:700; transition:all .2s; border-radius:18px; }
+  .bottom-nav button.active{ background:var(--brand); color:#fff; }
   .top-tabs{ display:none; gap:6px; padding:0 22px 12px; }
   .top-tabs button{ padding:9px 18px; border-radius:10px; font-size:14px; font-weight:700; color:var(--muted); }
   .top-tabs button.active{ background:#EEFBF1; color:var(--brand-dark); }
@@ -201,7 +204,7 @@ function freshState(){
     myPressing:null, pressingOrders:[], pressingAgents:[], pressingSelectedOrderId:null, realtimeChannel:null,
     mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], myDeliverySlots:[], myReviews:[], draftService:null, draftSlot:null, draftDeliverySlot:null,
 
-    myAgent:null, missions:[],
+    myAgent:null, missions:[], joinablePressings:[],
 
     campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
 
@@ -252,7 +255,7 @@ async function loadProfileAndRoute(retry){
     if(state.myPressing){ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]); attachPressingRealtime(); }
   } else if(data.role === "agent"){
     await loadMyAgent();
-    if(state.myAgent) await loadMissions();
+    if(state.myAgent) await loadMissions(); else await loadJoinablePressings();
   } else if(data.role === "admin"){
     await loadAdminPressings();
   }
@@ -497,7 +500,7 @@ async function selectPressing(id){
   setState({ clientScreen:"home" });
 }
 async function loadFeaturedReviews(pressingId){
-  const { data } = await sb.from("reviews").select("*").eq("pressing_id", pressingId).eq("featured", true).order("created_at",{ascending:false}).limit(6);
+  const { data } = await sb.rpc("get_featured_reviews", { p_pressing_id: pressingId });
   state.featuredReviews = data || [];
 }
 function renderBottomNav(){
@@ -535,7 +538,7 @@ function renderReviewsForClient(){
   return `<div class="screen" style="padding-top:6px;">
     <div style="font-size:14px;font-weight:700;margin-bottom:8px;">⭐ Avis de nos clients</div>
     ${reviews.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:10px;">Pas encore d'avis mis en avant.</p>` :
-      reviews.map(r => `<div class="card"><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</div>${r.comment ? `<div style="font-size:13px;color:var(--muted);margin-top:4px;">${esc(r.comment)}</div>` : ""}</div>`).join("")}
+      reviews.map(r => `<div class="card"><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)} <span style="font-size:12px;color:var(--muted);font-weight:600;">— ${esc(r.author_name||'Client')}</span></div>${r.comment ? `<div style="font-size:13px;color:var(--muted);margin-top:4px;">${esc(r.comment)}</div>` : ""}</div>`).join("")}
     <button class="btn btn-secondary" onclick="openReviewForm()">Donner mon avis sur ce pressing</button>
   </div>`;
 }
@@ -778,6 +781,12 @@ async function loadPressingOrders(){
     const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
     orders.forEach(o => { o.customer = byId[o.customer_id] || null; });
   }
+  const slotIds = [...new Set([...orders.map(o=>o.pickup_slot_id), ...orders.map(o=>o.delivery_slot_id)].filter(Boolean))];
+  if(slotIds.length){
+    const { data: slots } = await sb.from("time_slots").select("id,label,zone_label,landmark,start_time,end_time").in("id", slotIds);
+    const byId = {}; (slots||[]).forEach(s => byId[s.id] = s);
+    orders.forEach(o => { o.pickupSlot = byId[o.pickup_slot_id] || null; o.deliverySlot = byId[o.delivery_slot_id] || null; });
+  }
   state.pressingOrders = orders;
 }
 async function loadPressingAgents(){ const { data } = await sb.from("agents").select("*, profiles(full_name)").eq("pressing_id", state.myPressing.id).eq("status","active"); state.pressingAgents = data || []; }
@@ -843,7 +852,8 @@ function renderPressingOrderDetail(order){
       <div class="info-row"><div style="flex:1;"><div class="lab">Client</div><div class="val">${esc(order.customer?.full_name || '—')}</div></div>
         ${order.customer?.phone ? `<a href="tel:${order.customer.phone}" class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;">☎ ${esc(order.customer.phone)}</a>` : ""}
       </div>
-      <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}</div></div></div>
+      <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}${order.pickupSlot ? ` · ${esc(order.pickupSlot.label)}${order.pickupSlot.zone_label?' — '+esc(order.pickupSlot.zone_label):''} (${order.pickupSlot.start_time.slice(0,5)}–${order.pickupSlot.end_time.slice(0,5)})${order.pickupSlot.landmark?'<br/><span style=\'font-size:12px;color:var(--muted);\'>'+esc(order.pickupSlot.landmark)+'</span>':''}` : ' · sans créneau fixe'}</div></div></div>
+      <div class="info-row"><div><div class="lab">Livraison</div><div class="val">${order.deliverySlot ? `${esc(order.deliverySlot.label)}${order.deliverySlot.zone_label?' — '+esc(order.deliverySlot.zone_label):''} (${order.deliverySlot.start_time.slice(0,5)}–${order.deliverySlot.end_time.slice(0,5)})${order.deliverySlot.landmark?'<br/><span style=\'font-size:12px;color:var(--muted);\'>'+esc(order.deliverySlot.landmark)+'</span>':''}` : 'Pas encore de créneau fixe'}</div></div></div>
       <div class="info-row"><div><div class="lab">Quantité</div><div class="val">${order.quantity_count ? order.quantity_count + ' article(s)' : (order.quantity_estimate || "—")}</div></div></div>
       ${(order.order_items && order.order_items.length) ? `<div class="card"><div class="field-label">Détail</div>${order.order_items.map(it => `<div class="summary-row"><span>${esc(it.item_name||'Article')} ×${it.quantity}</span><span class="v">${fcfa(it.total_price)}</span></div>`).join("")}</div>` : ""}
       <div class="card"><div class="field-label">Montant final</div>
@@ -895,7 +905,14 @@ async function loadMyPressingConfig(){
 async function loadMyReviews(){
   const pid = myPressingId();
   const { data } = await sb.from("reviews").select("*").eq("pressing_id", pid).order("created_at",{ascending:false});
-  state.myReviews = data || [];
+  const reviews = data || [];
+  const custIds = [...new Set(reviews.map(r => r.customer_id).filter(Boolean))];
+  if(custIds.length){
+    const { data: profs } = await sb.from("profiles").select("id,full_name").in("id", custIds);
+    const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
+    reviews.forEach(r => { r.author = byId[r.customer_id] || null; });
+  }
+  state.myReviews = reviews;
 }
 function renderSlotList(list, kindLabel){
   if(list.length===0) return `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun créneau de ${kindLabel}. Ajoute-en un ci-dessous.</p>`;
@@ -957,7 +974,7 @@ function renderPressingConfig(){
     ${(state.myReviews||[]).length===0 ? `<p style="font-size:12px;color:var(--mutedLight);">Aucun avis pour le moment.</p>` :
       state.myReviews.map(r => `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</div>
+          <div><div style="font-size:14px;">${'⭐'.repeat(r.rating)}${'☆'.repeat(5-r.rating)} <span style="font-size:12px;color:var(--muted);font-weight:600;">— ${esc(r.author?.full_name || 'Client')}</span></div>
             ${r.comment ? `<div style="font-size:13px;color:var(--muted);margin-top:4px;">${esc(r.comment)}</div>` : ""}</div>
           <button class="chip ${r.featured?'active':''}" onclick="toggleReviewFeatured('${r.id}',${r.featured})">${r.featured?'Mis en avant':'Mettre en avant'}</button>
         </div>
@@ -1083,7 +1100,7 @@ async function loadMissions(){
   state.missions = missions;
 }
 function renderAgentApp(){
-  if(!state.myAgent) return `<div class="screen"><div class="empty">Ton compte agent n'est pas encore rattaché à un pressing.</div></div>`;
+  if(!state.myAgent) return renderAgentJoinPressing();
   if(state.campaignsView !== "none") return renderCampaignsHub();
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:16px;">
@@ -1100,6 +1117,29 @@ function renderAgentApp(){
         <button class="btn btn-primary" style="margin-top:8px;" onclick="agentProgress('${o.id}')">${STATUS_LABELS[nextStatus(o.order_status)]}</button>
       </div>`; }).join("")}
   </div>`;
+}
+async function loadJoinablePressings(){
+  const { data } = await sb.from("pressings").select("id,name,address").eq("status","active");
+  state.joinablePressings = data || [];
+}
+function renderAgentJoinPressing(){
+  const list = state.joinablePressings || [];
+  return `<div class="screen">
+    <h2 style="font-size:18px;margin-bottom:6px;">Rejoindre un pressing</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">Ton compte agent n'est pas encore rattaché à un pressing. Choisis celui pour lequel tu travailles.</p>
+    ${list.length===0 ? `<div class="empty">Aucun pressing actif pour le moment.</div>` :
+      list.map(p => `<div class="pressing-pick-card" onclick="joinAsAgent('${p.id}')">
+        <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.address||'')}</div>
+      </div>`).join("")}
+  </div>`;
+}
+async function joinAsAgent(pressingId){
+  const { error } = await sb.from("agents").insert({ id: state.profile.id, pressing_id: pressingId, phone: state.profile.phone, status:"active" });
+  if(error){ alert("Erreur : " + error.message); return; }
+  await loadMyAgent();
+  if(state.myAgent) await loadMissions();
+  render();
 }
 async function agentProgress(orderId){
   const order = state.missions.find(o => o.id === orderId);
@@ -1205,11 +1245,36 @@ function renderAdminPressingDetail(p){
   </div>`;
 }
 
-// =============================== PWA ===============================
+// =============================== PWA & WEB PUSH ===============================
+const VAPID_PUBLIC_KEY = "BCpkK6gvvxrMZsTitOi0JdTadB8CgilCBDpd1d6FOQLncuTKtL_1Cqtd6_0MZmkW5Bvw_k4nL6U1DZlh7eU7koM";
+
 function registerServiceWorker(){
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js').then(reg => { subscribeToPush(reg); }).catch(() => {});
   }
+}
+function urlBase64ToUint8Array(base64String){
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+async function subscribeToPush(reg){
+  try{
+    if(!("PushManager" in window)) return;
+    const permission = await Notification.requestPermission();
+    if(permission !== "granted") return;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+    }
+    const j = sub.toJSON();
+    if(state.profile){
+      await sb.from("push_subscriptions").upsert({
+        user_id: state.profile.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth
+      }, { onConflict:"endpoint" });
+    }
+  } catch(e){ console.warn("Push non disponible :", e.message); }
 }
 let deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
