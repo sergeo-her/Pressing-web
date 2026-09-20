@@ -4,8 +4,8 @@
   "description": "Collecte et livraison de vêtements pour pressings connectés",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#F5F6F8",
-  "theme_color": "#141F36",
+  "background_color": "#F6F8F7",
+  "theme_color": "#0B1220",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },

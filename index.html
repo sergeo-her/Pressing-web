@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta name="theme-color" content="#152238" />
+<meta name="theme-color" content="#0B1220" />
+<meta name="description" content="Plateforme de collecte et livraison pour pressings connectés" />
 <title>Pressing Connecté</title>
 <link rel="manifest" href="/manifest.json" />
 <link rel="apple-touch-icon" href="/icon-192.png" />
@@ -14,20 +15,30 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500..700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
-  :root{ --ink:#0F172A; --ink2:#1E293B; --brand:#16A34A; --brand-dark:#0E7A36; --teal:#16A34A; --amber:#F0AC3D; --bg:#F4F7F6; --border:#E5E9E8; --muted:#5B6B76; --mutedLight:#93A0A8; }
+  :root{
+    --ink:#0B1220; --ink2:#1A253A; --brand:#0D9F4F; --brand-dark:#0A7A3C; --brand-soft:#E8F8EF;
+    --teal:#0D9F4F; --amber:#F0AC3D; --amber-soft:#FFF6E5;
+    --bg:#F6F8F7; --surface:#FFFFFF; --border:#E2E8E6; --muted:#5A6B75; --mutedLight:#8B9AA3;
+    --danger:#C53030; --danger-soft:#FDECEC; --shadow:0 4px 20px rgba(11,18,32,.06); --radius:16px;
+  }
   *{ box-sizing:border-box; }
   html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
-  body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:17px; line-height:1.55; color:var(--ink); }
-  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 30px rgba(15,23,42,.06); position:relative; padding-bottom:84px; overflow-x:hidden; }
-  @media (min-width:641px){ #app{ max-width:720px; padding-bottom:24px; } .bottom-nav{ display:none; } .top-tabs{ display:flex !important; } }
-  @media (min-width:1025px){ #app{ max-width:960px; box-shadow:0 0 60px rgba(15,23,42,.08); } }
-  h1,h2,h3{ font-family:'Fraunces',Georgia,serif; margin:0; }
+  body{ margin:0; background:var(--bg); font-family:'Manrope',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:16px; line-height:1.55; color:var(--ink); -webkit-font-smoothing:antialiased; }
+  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:var(--surface); box-shadow:0 0 40px rgba(11,18,32,.07); position:relative; padding-bottom:90px; overflow-x:hidden; }
+  @media (min-width:641px){ #app{ max-width:720px; padding-bottom:28px; } .bottom-nav{ display:none; } .top-tabs{ display:flex !important; } }
+  @media (min-width:1025px){ #app{ max-width:980px; box-shadow:0 0 80px rgba(11,18,32,.09); } }
+  h1,h2,h3{ font-family:'Fraunces',Georgia,serif; margin:0; letter-spacing:-0.01em; }
   a{ text-decoration:none; color:inherit; }
   button{ font-family:inherit; cursor:pointer; border:none; background:none; }
-  input, select{ font-family:inherit; font-size:15px; }
-  @keyframes fadeIn{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
-  .screen{ padding:18px 22px; animation:fadeIn .35s ease; }
-  @media (min-width:641px){ .screen{ padding:26px 40px; } }
+  input, select, textarea{ font-family:inherit; font-size:15px; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);} }
+  @keyframes pulseSoft{ 0%,100%{opacity:1;} 50%{opacity:.7;} }
+  .screen{ padding:20px 22px; animation:fadeIn .32s ease; }
+  @media (min-width:641px){ .screen{ padding:28px 40px; } }
+  .hover-lift{ transition:transform .15s ease, box-shadow .15s ease; }
+  .hover-lift:hover{ transform:translateY(-2px); box-shadow:0 8px 24px rgba(11,18,32,.08); }
+  .card{ border:1.5px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:12px; background:var(--surface); transition:box-shadow .15s, border-color .15s; }
+  .card:hover{ border-color:#d0d8d6; }
   .hero{
     background:linear-gradient(160deg, rgba(15,23,42,.94) 0%, rgba(15,23,42,.80) 55%, rgba(22,163,74,.55) 100%),
       url('https://images.unsplash.com/photo-1545173168-9f1947eebb7f?q=45&w=640&auto=format&fit=crop') center/cover;
@@ -38,13 +49,16 @@
   .hero h1{ font-size:30px; line-height:1.2; font-weight:600; }
   @media (min-width:641px){ .hero h1{ font-size:42px; max-width:520px; } }
   .hero p{ font-size:15.5px; color:rgba(255,255,255,.82); margin-top:14px; line-height:1.6; max-width:440px; }
-  .btn{ display:block; width:100%; text-align:center; padding:15px; border-radius:14px; font-size:15.5px; font-weight:700; margin-top:11px; transition:transform .12s ease, box-shadow .12s ease; }
-  .btn:active{ transform:scale(.97); }
-  .btn-amber{ background:linear-gradient(135deg,var(--brand),var(--brand-dark)); color:#fff; box-shadow:0 8px 20px rgba(22,163,74,.35); }
-  .btn-outline-white{ border:1.5px solid rgba(255,255,255,.4); color:#fff; }
-  .btn-primary{ background:var(--ink); color:#fff; box-shadow:0 4px 14px rgba(15,23,42,.2); }
+  .btn{ display:block; width:100%; text-align:center; padding:14px 16px; border-radius:14px; font-size:15px; font-weight:700; margin-top:10px; transition:transform .12s ease, box-shadow .15s ease, background .15s; letter-spacing:-0.01em; }
+  .btn:active{ transform:scale(.975); }
+  .btn-amber{ background:linear-gradient(135deg,var(--brand),var(--brand-dark)); color:#fff; box-shadow:0 8px 22px rgba(13,159,79,.32); }
+  .btn-outline-white{ border:1.5px solid rgba(255,255,255,.45); color:#fff; backdrop-filter:blur(4px); }
+  .btn-primary{ background:var(--ink); color:#fff; box-shadow:0 4px 16px rgba(11,18,32,.18); }
+  .btn-primary:hover{ background:var(--ink2); }
   .btn-secondary{ border:1.5px solid var(--border); color:var(--muted); background:#fff; }
-  .btn-danger{ border:1.5px solid #F3C6C6; color:#B42323; background:#fff; }
+  .btn-secondary:hover{ background:#f8faf9; border-color:#d0d8d6; }
+  .btn-danger{ border:1.5px solid #f0c0c0; color:var(--danger); background:#fff; }
+  .btn-danger:hover{ background:var(--danger-soft); }
   .btn-row{ display:flex; gap:10px; }
   .btn-row .btn{ margin-top:0; }
   .steps{ display:flex; gap:5px; margin:12px 0 6px; }
@@ -53,28 +67,27 @@
   .step-caption{ font-size:13px; color:var(--mutedLight); margin-bottom:16px; font-weight:600; }
   .field-label{ font-size:13px; font-weight:700; color:var(--muted); margin-bottom:7px; }
   .field{ margin-bottom:18px; }
-  input[type=text], input[type=date], input[type=time], input[type=number], input[type=password], input[type=email], input[type=tel], select{
-    width:100%; border:1.5px solid var(--border); border-radius:12px; padding:13px 14px; outline:none; background:#fff; transition:border-color .15s; font-size:15.5px;
+  input[type=text], input[type=date], input[type=time], input[type=number], input[type=password], input[type=email], input[type=tel], select, textarea{
+    width:100%; border:1.5px solid var(--border); border-radius:12px; padding:13px 14px; outline:none; background:#fff; transition:border-color .15s, box-shadow .15s; font-size:15px;
   }
-  input:focus, select:focus{ border-color:var(--brand); }
+  input:focus, select:focus, textarea:focus{ border-color:var(--brand); box-shadow:0 0 0 3px rgba(13,159,79,.12); }
   .toggle-row{ display:flex; gap:10px; }
   .toggle-card{ flex:1; display:flex; flex-direction:column; align-items:center; gap:7px; padding:15px 0; border-radius:14px; border:1.5px solid var(--border); font-size:13px; font-weight:700; color:var(--muted); background:#fff; transition:all .15s; }
-  .toggle-card.active{ border-color:var(--brand); background:#EEFBF1; color:var(--brand-dark); box-shadow:0 3px 10px rgba(22,163,74,.15); }
+  .toggle-card.active{ border-color:var(--brand); background:var(--brand-soft); color:var(--brand-dark); box-shadow:0 3px 12px rgba(13,159,79,.14); }
   .chip-row{ display:flex; gap:9px; flex-wrap:wrap; }
   .chip{ padding:8px 15px; border-radius:999px; font-size:13px; font-weight:700; border:1.5px solid var(--border); background:#fff; color:var(--muted); transition:all .15s; }
-  .chip.active{ background:var(--brand); border-color:var(--brand); color:#fff; box-shadow:0 3px 10px rgba(22,163,74,.25); }
+  .chip.active{ background:var(--brand); border-color:var(--brand); color:#fff; box-shadow:0 3px 12px rgba(13,159,79,.22); }
   .radio-row{ display:flex; align-items:center; justify-content:space-between; border:1.5px solid var(--border); border-radius:12px; padding:13px 15px; margin-bottom:9px; transition:all .15s; }
-  .radio-row.active{ border-color:var(--brand); background:#EEFBF1; }
+  .radio-row.active{ border-color:var(--brand); background:var(--brand-soft); }
   .radio-dot{ width:18px; height:18px; border-radius:999px; border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; }
   .radio-row.active .radio-dot{ border-color:var(--brand); }
   .radio-dot span{ width:9px; height:9px; border-radius:999px; background:var(--brand); display:none; }
   .radio-row.active .radio-dot span{ display:block; }
   .qty-row{ display:flex; align-items:center; justify-content:space-between; border:1.5px solid var(--border); border-radius:14px; padding:14px 16px; margin-bottom:9px; background:#fff; transition:all .15s; }
-  .qty-row.active{ border-color:var(--brand); background:#EEFBF1; }
+  .qty-row.active{ border-color:var(--brand); background:var(--brand-soft); }
   .qty-stepper{ display:flex; align-items:center; gap:12px; }
   .qty-btn{ width:32px; height:32px; border-radius:9px; border:1.5px solid var(--border); background:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; }
   .qty-val{ min-width:20px; text-align:center; font-weight:700; font-size:16px; }
-  .card{ border:1.5px solid var(--border); border-radius:16px; padding:16px; margin-bottom:11px; transition:box-shadow .15s; }
   .summary-row{ display:flex; justify-content:space-between; font-size:15px; margin-bottom:7px; }
   .summary-row .v{ font-weight:700; text-align:right; max-width:60%; }
   .divider-row{ border-top:1.5px solid #EEF1F0; padding-top:10px; margin-top:6px; display:flex; justify-content:space-between; align-items:center; }
@@ -84,19 +97,19 @@
   .header-title{ font-size:19px; font-weight:800; font-family:'Fraunces',serif; }
   .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:22px; }
   @media (min-width:641px){ .stat-grid{ grid-template-columns:repeat(4,1fr); } }
-  .stat-card{ border:1.5px solid var(--border); border-radius:14px; padding:16px; background:linear-gradient(160deg,#fff,#fafbfc); }
-  .stat-card .val{ font-family:'Fraunces',serif; font-size:23px; font-weight:700; }
-  .stat-card .lab{ font-size:12px; color:var(--muted); margin-top:3px; font-weight:600; }
+  .stat-card{ border:1.5px solid var(--border); border-radius:14px; padding:16px; background:linear-gradient(165deg,#fff 0%,#f8fbf9 100%); box-shadow:0 1px 3px rgba(11,18,32,.03); }
+  .stat-card .val{ font-family:'Fraunces',serif; font-size:24px; font-weight:700; color:var(--ink); }
+  .stat-card .lab{ font-size:11.5px; color:var(--muted); margin-top:4px; font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
   .order-card{ border:1.5px solid var(--border); border-radius:14px; padding:16px; margin-bottom:9px; cursor:pointer; transition:box-shadow .15s, transform .1s; }
   .order-card:active{ transform:scale(.99); }
   .order-card .top{ display:flex; justify-content:space-between; align-items:flex-start; }
-  .badge{ font-size:12px; padding:4px 11px; border-radius:999px; background:#E9F9EC; color:var(--brand-dark); font-weight:700; }
-  .badge-amber{ background:#FDF1DD; color:#946318; }
-  .badge-red{ background:#FBE7E7; color:#B42323; }
+  .badge{ font-size:11.5px; padding:4px 12px; border-radius:999px; background:var(--brand-soft); color:var(--brand-dark); font-weight:700; letter-spacing:.01em; }
+  .badge-amber{ background:var(--amber-soft); color:#946318; }
+  .badge-red{ background:var(--danger-soft); color:var(--danger); }
   .info-row{ display:flex; gap:11px; align-items:flex-start; border:1.5px solid #EEF1F0; border-radius:12px; padding:14px; margin-bottom:9px; }
   .info-row .lab{ font-size:12px; color:var(--mutedLight); font-weight:600; }
   .info-row .val{ font-size:15px; margin-top:2px; }
-  .empty{ text-align:center; padding:48px 20px; font-size:15px; color:var(--mutedLight); }
+  .empty{ text-align:center; padding:52px 24px; font-size:15px; color:var(--mutedLight); line-height:1.5; }
   .bottom-nav{ position:fixed; bottom:14px; width:calc(100% - 32px); max-width:448px; left:50%; transform:translateX(-50%); border-radius:22px; background:var(--ink); display:flex; box-shadow:0 10px 30px rgba(15,23,42,.35); z-index:25; padding:4px; }
   .bottom-nav button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:10px 0; color:rgba(255,255,255,.55); font-size:10.5px; font-weight:700; transition:all .2s; border-radius:18px; }
   .bottom-nav button.active{ background:var(--brand); color:#fff; }
@@ -209,6 +222,7 @@ function freshState(){
     campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
 
     adminPressings:[], adminSelectedPressingId:null, adminOrders:[], paymentFormFor:null,
+    adminCreateOpen:false, adminCreateError:null,
 
     notifications:[], unreadCount:0, notifOpen:false,
   };
@@ -252,6 +266,11 @@ async function loadProfileAndRoute(retry){
     await Promise.all([loadPressingsListForClient(), loadClientOrders()]);
   } else if(data.role === "pressing"){
     await loadMyPressing();
+    if(!state.myPressing){
+      // Auto-création du réseau pressing + essai 30j si le compte existe mais pas encore de fiche
+      await ensurePressingForOwner(data);
+      await loadMyPressing();
+    }
     if(state.myPressing){ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]); attachPressingRealtime(); }
   } else if(data.role === "agent"){
     await loadMyAgent();
@@ -788,7 +807,46 @@ function renderHistory(){
 }
 
 // =============================== PRESSING ===============================
+async function ensurePressingForOwner(profile){
+  // Crée automatiquement la fiche pressing + abonnement essai 30 jours
+  // si le profil a le rôle "pressing" mais aucune fiche n'existe encore.
+  const name = (profile.full_name || "Mon Pressing").trim() || "Mon Pressing";
+  const phone = (profile.phone || "").trim() || null;
+  const { data: pressing, error } = await sb.from("pressings").insert({
+    name,
+    phone,
+    owner_profile_id: profile.id,
+    status: "active",
+    address: null
+  }).select("*").single();
+  if(error || !pressing){
+    console.error("Création pressing échouée:", error);
+    return null;
+  }
+  // Essai gratuit 30 jours
+  const trialEnd = new Date();
+  trialEnd.setDate(trialEnd.getDate() + 30);
+  await sb.from("subscriptions").insert({
+    pressing_id: pressing.id,
+    plan: "trial",
+    trial_end: trialEnd.toISOString().slice(0,10),
+    manual_status: "ok",
+    current_period_start: null,
+    current_period_end: null
+  });
+  return pressing;
+}
 async function loadMyPressing(){ const { data } = await sb.from("pressings").select("*").eq("owner_profile_id", state.profile.id).maybeSingle(); state.myPressing = data; }
+async function manualCreateMyPressing(){
+  if(!state.profile) return;
+  await ensurePressingForOwner(state.profile);
+  await loadMyPressing();
+  if(state.myPressing){
+    await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]);
+    attachPressingRealtime();
+  }
+  render();
+}
 async function loadPressingOrders(){
   const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false});
   const orders = data || [];
@@ -816,7 +874,14 @@ function attachPressingRealtime(){
 }
 
 function renderPressingApp(){
-  if(!state.myPressing) return `<div class="screen"><div class="empty">Aucun pressing n'est encore associé à ce compte.</div></div>`;
+  if(!state.myPressing) return `<div class="screen">
+    <div class="empty">
+      <div style="font-size:40px;margin-bottom:12px;">🏭</div>
+      <div style="font-weight:700;margin-bottom:8px;">Aucun pressing associé</div>
+      <p style="font-size:14px;color:var(--muted);max-width:280px;margin:0 auto 16px;">Ton compte est prêt. Clique ci-dessous pour créer ton réseau pressing et démarrer l'essai gratuit de 30 jours.</p>
+      <button class="btn btn-primary" onclick="manualCreateMyPressing()">Créer mon pressing maintenant</button>
+    </div>
+  </div>`;
   if(state.campaignsView !== "none") return renderCampaignsHub();
   if(state.pressingConfigView !== "none") return renderPressingConfig();
 
@@ -1181,7 +1246,7 @@ async function loadAdminOrders(pressingId){
   const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", pressingId).order("created_at",{ascending:false});
   state.adminOrders = data || [];
 }
-async function adminSelectPressing(id){ state.adminSelectedPressingId = id; await loadAdminOrders(id); render(); }
+async function adminSelectPressing(id){ state.adminSelectedPressingId = id; state.adminCreateOpen = false; await loadAdminOrders(id); render(); }
 function getSub(p){ return Array.isArray(p.subscriptions) ? p.subscriptions[0] : p.subscriptions; }
 function openPaymentForm(id){ state.paymentFormFor = id; render(); }
 function cancelPaymentForm(){ state.paymentFormFor = null; render(); }
@@ -1190,16 +1255,31 @@ async function recordPayment(pressingId){
   const sub = getSub(state.adminPressings.find(p=>p.id===pressingId));
   const base = (sub?.current_period_end && new Date(sub.current_period_end) > new Date()) ? new Date(sub.current_period_end) : new Date();
   const end = new Date(base); end.setDate(end.getDate() + PLAN_DURATIONS[plan]);
-  await sb.from("subscriptions").update({
-    plan, current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
-    manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO()
-  }).eq("pressing_id", pressingId);
+  // Upsert-like: try update first, if no row create
+  const { data: existing } = await sb.from("subscriptions").select("id").eq("pressing_id", pressingId).maybeSingle();
+  if(existing){
+    await sb.from("subscriptions").update({
+      plan, current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
+      manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO(), trial_end: null
+    }).eq("pressing_id", pressingId);
+  } else {
+    await sb.from("subscriptions").insert({
+      pressing_id: pressingId, plan,
+      current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
+      manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO()
+    });
+  }
   state.paymentFormFor = null;
   await loadAdminPressings(); render();
 }
 async function toggleSubscriptionSuspend(pressingId, currentManualStatus){
   const next = currentManualStatus === "suspended" ? "ok" : "suspended";
-  await sb.from("subscriptions").update({ manual_status: next }).eq("pressing_id", pressingId);
+  const { data: existing } = await sb.from("subscriptions").select("id").eq("pressing_id", pressingId).maybeSingle();
+  if(existing){
+    await sb.from("subscriptions").update({ manual_status: next }).eq("pressing_id", pressingId);
+  } else {
+    await sb.from("subscriptions").insert({ pressing_id: pressingId, manual_status: next, plan: "mensuel" });
+  }
   await loadAdminPressings(); render();
 }
 async function adminTogglePressingStatus(id, current){
@@ -1208,39 +1288,132 @@ async function adminTogglePressingStatus(id, current){
 }
 async function refreshAdminPressings(){ await loadAdminPressings(); render(); }
 
+function openAdminCreate(){ state.adminCreateOpen = true; state.adminCreateError = null; render(); }
+function cancelAdminCreate(){ state.adminCreateOpen = false; state.adminCreateError = null; render(); }
+
+async function submitAdminCreatePressing(){
+  const name = (document.getElementById("adminPressName")?.value || "").trim();
+  const phone = (document.getElementById("adminPressPhone")?.value || "").trim();
+  const ownerEmail = (document.getElementById("adminPressOwnerEmail")?.value || "").trim().toLowerCase();
+  const address = (document.getElementById("adminPressAddress")?.value || "").trim() || null;
+  if(!name){ state.adminCreateError = "Le nom du pressing est obligatoire."; render(); return; }
+
+  let ownerId = null;
+  if(ownerEmail){
+    // Cherche un profil existant avec cet email (via profiles si l'email y est stocké, sinon on laisse null)
+    // Note: profiles table may not have email; we try best-effort by full_name or leave unassigned.
+    // Better: look for profiles with role=pressing that have no pressing yet is hard without email.
+    // We store owner_profile_id only if we can resolve it. Otherwise create unowned and admin can link later.
+    const { data: prows } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","pressing").limit(50);
+    // Fallback: if phone matches a profile, use it
+    if(phone && prows){
+      const match = prows.find(p => (p.phone||"").replace(/\s/g,"") === phone.replace(/\s/g,""));
+      if(match) ownerId = match.id;
+    }
+  }
+
+  const { data: pressing, error } = await sb.from("pressings").insert({
+    name, phone: phone || null, address, owner_profile_id: ownerId, status: "active"
+  }).select("*").single();
+  if(error){
+    state.adminCreateError = "Erreur création : " + (error.message || "inconnue");
+    render(); return;
+  }
+  // Créer essai 30j
+  const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
+  await sb.from("subscriptions").insert({
+    pressing_id: pressing.id, plan: "trial",
+    trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
+  });
+  state.adminCreateOpen = false;
+  state.adminCreateError = null;
+  await loadAdminPressings();
+  render();
+}
+
+async function adminLinkOwner(pressingId){
+  const emailOrPhone = (document.getElementById("linkOwnerInput")?.value || "").trim();
+  if(!emailOrPhone) return;
+  // Best effort: match by phone
+  const { data: prows } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","pressing");
+  const clean = emailOrPhone.replace(/\s/g,"");
+  const match = (prows||[]).find(p => (p.phone||"").replace(/\s/g,"") === clean || (p.full_name||"").toLowerCase().includes(emailOrPhone.toLowerCase()));
+  if(!match){
+    alert("Aucun profil pressing trouvé avec ce téléphone ou nom. Demande à l'utilisateur de s'inscrire d'abord avec le rôle Pressing.");
+    return;
+  }
+  await sb.from("pressings").update({ owner_profile_id: match.id }).eq("id", pressingId);
+  await loadAdminPressings();
+  render();
+}
+
 function renderAdminApp(){
   if(state.adminSelectedPressingId){
     const p = state.adminPressings.find(x => x.id === state.adminSelectedPressingId);
+    if(!p){ state.adminSelectedPressingId = null; return renderAdminApp(); }
     return renderAdminPressingDetail(p);
   }
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:16px;">
-      <div><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">Administration générale</div><div style="font-size:19px;font-family:'Fraunces',serif;">Tous les réseaux pressing</div></div>
-      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="refreshAdminPressings()">🔄</button>
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
+        <div style="font-size:22px;font-family:'Fraunces',serif;font-weight:700;">Réseaux pressing</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="refreshAdminPressings()" title="Actualiser">🔄</button>
+        <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="openAdminCreate()">+ Créer</button>
+      </div>
     </div>
+
+    ${state.adminCreateOpen ? `
+      <div class="card" style="margin-bottom:18px;border:2px solid var(--brand);background:linear-gradient(160deg,#f0fdf4,#fff);">
+        <div style="font-weight:700;font-size:15px;margin-bottom:12px;">Nouveau réseau pressing</div>
+        <div class="field"><div class="field-label">Nom du pressing *</div><input type="text" id="adminPressName" placeholder="Ex: Pressing du Centre" /></div>
+        <div class="field"><div class="field-label">Téléphone</div><input type="tel" id="adminPressPhone" placeholder="6XX XX XX XX" /></div>
+        <div class="field"><div class="field-label">Adresse (optionnel)</div><input type="text" id="adminPressAddress" placeholder="Quartier, ville..." /></div>
+        <div class="field"><div class="field-label">Téléphone ou nom du propriétaire (pour lier automatiquement)</div><input type="text" id="adminPressOwnerEmail" placeholder="Numéro déjà inscrit en rôle Pressing" /></div>
+        ${state.adminCreateError ? `<div class="error-msg">${esc(state.adminCreateError)}</div>` : ""}
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="submitAdminCreatePressing()">Créer + essai 30j</button>
+          <button class="btn btn-secondary" style="width:auto;padding:10px 14px;" onclick="cancelAdminCreate()">Annuler</button>
+        </div>
+        <p style="font-size:11px;color:var(--mutedLight);margin-top:10px;">Un abonnement essai de 30 jours est créé automatiquement. Le propriétaire pourra se connecter et accéder immédiatement au tableau de bord.</p>
+      </div>
+    ` : ""}
+
     <div class="stat-grid">
-      <div class="stat-card"><div class="val">${state.adminPressings.length}</div><div class="lab">Pressings inscrits</div></div>
-      <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>computeSubStatus(getSub(p)).status==='active').length}</div><div class="lab">Abonnements actifs</div></div>
+      <div class="stat-card"><div class="val">${state.adminPressings.length}</div><div class="lab">Pressings</div></div>
+      <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>computeSubStatus(getSub(p)).status==='active' || computeSubStatus(getSub(p)).status==='trial').length}</div><div class="lab">Actifs / Essai</div></div>
+      <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>computeSubStatus(getSub(p)).status==='expired' || computeSubStatus(getSub(p)).status==='suspended').length}</div><div class="lab">Expirés / Suspendus</div></div>
+      <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>p.status==='active').length}</div><div class="lab">Comptes actifs</div></div>
     </div>
-    ${state.adminPressings.length===0 ? `<div class="empty">Aucun pressing enregistré.</div>` :
+
+    ${state.adminPressings.length===0 ? `<div class="empty">
+      <div style="font-size:36px;margin-bottom:10px;">🏭</div>
+      <div style="font-weight:700;margin-bottom:6px;">Aucun pressing enregistré</div>
+      <p style="font-size:13px;color:var(--muted);">Crée le premier réseau ou demande aux propriétaires de s'inscrire avec le rôle « Pressing ».</p>
+    </div>` :
       state.adminPressings.map(p => {
         const sub = getSub(p); const info = computeSubStatus(sub);
         const badgeClass = info.status==='active' ? 'badge' : info.status==='trial' ? 'badge-amber' : 'badge-red';
-        const badgeText = { active:"Actif", trial:"Essai", expired:"Expiré", suspended:"Suspendu", inconnu:"—" }[info.status];
-        return `<div class="card">
+        const badgeText = { active:"Actif", trial:"Essai", expired:"Expiré", suspended:"Suspendu", inconnu:"—" }[info.status] || info.status;
+        return `<div class="card hover-lift">
           <div class="header-row" onclick="adminSelectPressing('${p.id}')" style="cursor:pointer;">
-            <div><div style="font-size:14px;font-weight:700;">${esc(p.name)}</div><div style="font-size:12px;color:var(--muted);">${esc(p.phone||'')}</div></div>
+            <div style="flex:1;">
+              <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.phone||'Pas de téléphone')} ${p.owner_profile_id ? '· Propriétaire lié' : '· <span style="color:#B42323;">Sans propriétaire</span>'}</div>
+            </div>
             <span class="badge ${badgeClass}">${badgeText}${info.daysLeft!=null && info.status!=='expired' ? ' · ' + info.daysLeft + 'j' : ''}</span>
           </div>
-          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
             ${state.paymentFormFor === p.id ? `
-              <select id="planSelect-${p.id}" style="flex:1;">${Object.entries(PLAN_LABELS).map(([k,l]) => `<option value="${k}">${l}</option>`).join("")}</select>
-              <button class="btn btn-primary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="recordPayment('${p.id}')">Confirmer</button>
+              <select id="planSelect-${p.id}" style="flex:1;min-width:140px;">${Object.entries(PLAN_LABELS).map(([k,l]) => `<option value="${k}">${l}</option>`).join("")}</select>
+              <button class="btn btn-primary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;" onclick="recordPayment('${p.id}')">Confirmer</button>
               <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="cancelPaymentForm()">Annuler</button>
             ` : `
-              <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="openPaymentForm('${p.id}')">💳 Paiement</button>
-              <button class="btn ${sub?.manual_status==='suspended'?'btn-primary':'btn-danger'}" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="toggleSubscriptionSuspend('${p.id}','${sub?.manual_status}')">
-                ${sub?.manual_status==='suspended' ? '▶ Réactiver' : '⏸ Suspendre'}
+              <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="openPaymentForm('${p.id}')">💳 Enregistrer paiement</button>
+              <button class="btn ${sub?.manual_status==='suspended'?'btn-primary':'btn-danger'}" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="toggleSubscriptionSuspend('${p.id}','${sub?.manual_status||'ok'}')">
+                ${sub?.manual_status==='suspended' ? '▶ Réactiver abo' : '⏸ Suspendre abo'}
               </button>
             `}
           </div>
@@ -1252,22 +1425,58 @@ function renderAdminPressingDetail(p){
   const revenue = state.adminOrders.reduce((s,o) => s + (o.final_amount || o.estimated_amount || 0), 0);
   const sub = getSub(p); const info = computeSubStatus(sub);
   return `<div class="screen">
-    <div class="header-row"><div class="header-left"><button class="back-btn" onclick="setState({adminSelectedPressingId:null})">←</button><div class="header-title">${esc(p.name)}</div></div></div>
-    <div class="card" style="margin-top:12px;">
-      <div style="font-size:13px;color:var(--muted);">Abonnement</div>
-      <div style="font-size:14px;font-weight:700;">${info.status} ${info.daysLeft!=null?`(${info.daysLeft} j)`:''}</div>
-      ${sub?.last_payment_at ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Dernier paiement : ${sub.last_payment_at} · ${fcfa(sub.last_payment_amount)}</div>` : ""}
+    <div class="header-row" style="margin-bottom:8px;">
+      <div class="header-left">
+        <button class="back-btn" onclick="setState({adminSelectedPressingId:null})">←</button>
+        <div>
+          <div class="header-title">${esc(p.name)}</div>
+          <div style="font-size:12px;color:var(--muted);">${esc(p.phone||'')} ${p.address ? '· '+esc(p.address) : ''}</div>
+        </div>
+      </div>
     </div>
+
+    <div class="card" style="margin-top:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:12px;color:var(--muted);font-weight:600;">Abonnement</div>
+          <div style="font-size:16px;font-weight:700;text-transform:capitalize;">${info.status} ${info.daysLeft!=null?`· ${info.daysLeft} j restants`:''}</div>
+          ${sub?.last_payment_at ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Dernier paiement : ${sub.last_payment_at} · ${fcfa(sub.last_payment_amount)}</div>` : ""}
+          ${sub?.trial_end && !sub?.current_period_end ? `<div style="font-size:12px;color:var(--muted);margin-top:2px;">Fin d'essai : ${sub.trial_end}</div>` : ""}
+        </div>
+        <span class="badge ${info.status==='active'||info.status==='trial'?'badge':'badge-red'}">${info.status}</span>
+      </div>
+    </div>
+
     <div class="stat-grid" style="margin-top:12px;">
       <div class="stat-card"><div class="val">${state.adminOrders.length}</div><div class="lab">Commandes</div></div>
-      <div class="stat-card"><div class="val">${fcfa(revenue)}</div><div class="lab">CA (est./final)</div></div>
+      <div class="stat-card"><div class="val">${fcfa(revenue)}</div><div class="lab">CA total</div></div>
     </div>
-    <button class="btn ${p.status==='active'?'btn-danger':'btn-primary'}" onclick="adminTogglePressingStatus('${p.id}','${p.status}')">${p.status==='active' ? 'Désactiver ce compte pressing' : 'Réactiver ce compte pressing'}</button>
-    <div style="font-size:14px;font-weight:700;margin:16px 0 8px;">Commandes</div>
-    ${state.adminOrders.length===0 ? `<div class="empty">Aucune commande.</div>` :
+
+    ${!p.owner_profile_id ? `
+      <div class="card" style="border-color:#F0AC3D;background:#FFFBEB;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px;">⚠️ Aucun propriétaire lié</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Le propriétaire ne peut pas encore accéder au tableau de bord. Liez un compte existant (rôle Pressing) via son téléphone ou nom.</p>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="linkOwnerInput" placeholder="Téléphone ou nom du propriétaire" style="flex:1;" />
+          <button class="btn btn-primary" style="width:auto;padding:8px 12px;margin:0;font-size:13px;" onclick="adminLinkOwner('${p.id}')">Lier</button>
+        </div>
+      </div>
+    ` : `<div class="info-row"><div><div class="lab">Propriétaire</div><div class="val">Compte lié ✓</div></div></div>`}
+
+    <div style="display:flex;gap:8px;margin:14px 0;">
+      <button class="btn ${p.status==='active'?'btn-danger':'btn-primary'}" style="flex:1;" onclick="adminTogglePressingStatus('${p.id}','${p.status}')">
+        ${p.status==='active' ? 'Désactiver le compte' : 'Réactiver le compte'}
+      </button>
+    </div>
+
+    <div style="font-size:15px;font-weight:700;margin:18px 0 10px;font-family:'Fraunces',serif;">Commandes récentes</div>
+    ${state.adminOrders.length===0 ? `<div class="empty">Aucune commande pour ce pressing.</div>` :
       state.adminOrders.map(o => `<div class="card">
-        <div style="display:flex;justify-content:space-between;"><span style="font-weight:700;font-size:14px;">${o.order_number}</span><span class="badge">${STATUS_LABELS[o.order_status]}</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px;">${fcfa(o.final_amount || o.estimated_amount)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;font-size:14px;">${o.order_number}</span>
+          <span class="badge">${STATUS_LABELS[o.order_status] || o.order_status}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">${fcfa(o.final_amount || o.estimated_amount)} · ${o.created_at ? new Date(o.created_at).toLocaleDateString('fr-FR') : ''}</div>
       </div>`).join("")}
   </div>`;
 }
