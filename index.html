@@ -222,7 +222,7 @@ function freshState(){
     campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
 
     adminPressings:[], adminSelectedPressingId:null, adminOrders:[], paymentFormFor:null,
-    adminCreateOpen:false, adminCreateError:null,
+    adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
 
     notifications:[], unreadCount:0, notifOpen:false,
   };
@@ -481,8 +481,15 @@ function renderNotifPanel(){
 
 // =============================== CLIENT ===============================
 async function loadPressingsListForClient(){
-  const { data } = await sb.from("pressings").select("id,name,phone,whatsapp,address").eq("status","active");
-  state.pressingsList = data || [];
+  const { data } = await sb.from("pressings").select("id,name,phone,whatsapp,address,owner_profile_id,created_at").eq("status","active").order("created_at",{ascending:true});
+  // Dédoublonnage côté client par nom (insensible à la casse) — garde le plus ancien
+  const seen = new Map();
+  (data || []).forEach(p => {
+    const key = (p.name || "").trim().toLowerCase();
+    if(!key) return;
+    if(!seen.has(key)) seen.set(key, p);
+  });
+  state.pressingsList = Array.from(seen.values());
 }
 async function loadClientOrders(){
   const { data } = await sb.from("orders").select("*, pressings(name), order_items(*)").eq("customer_id", state.profile.id).order("created_at",{ascending:false});
@@ -808,35 +815,47 @@ function renderHistory(){
 
 // =============================== PRESSING ===============================
 async function ensurePressingForOwner(profile){
-  // Crée automatiquement la fiche pressing + abonnement essai 30 jours
-  // si le profil a le rôle "pressing" mais aucune fiche n'existe encore.
+  // Ne crée QUE s'il n'existe encore AUCUNE fiche pour ce propriétaire.
+  // Évite les doublons (listes "PRESSING FIRST" x4 côté client).
+  const { data: existing } = await sb.from("pressings")
+    .select("*")
+    .eq("owner_profile_id", profile.id)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if(existing){
+    // S'assurer qu'un abonnement existe
+    const { data: sub } = await sb.from("subscriptions").select("id").eq("pressing_id", existing.id).maybeSingle();
+    if(!sub){
+      const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
+      await sb.from("subscriptions").insert({
+        pressing_id: existing.id, plan: "trial",
+        trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
+      });
+    }
+    return existing;
+  }
   const name = (profile.full_name || "Mon Pressing").trim() || "Mon Pressing";
   const phone = (profile.phone || "").trim() || null;
   const { data: pressing, error } = await sb.from("pressings").insert({
-    name,
-    phone,
-    owner_profile_id: profile.id,
-    status: "active",
-    address: null
+    name, phone, owner_profile_id: profile.id, status: "active", address: null
   }).select("*").single();
   if(error || !pressing){
     console.error("Création pressing échouée:", error);
     return null;
   }
-  // Essai gratuit 30 jours
-  const trialEnd = new Date();
-  trialEnd.setDate(trialEnd.getDate() + 30);
+  const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
   await sb.from("subscriptions").insert({
-    pressing_id: pressing.id,
-    plan: "trial",
-    trial_end: trialEnd.toISOString().slice(0,10),
-    manual_status: "ok",
-    current_period_start: null,
-    current_period_end: null
+    pressing_id: pressing.id, plan: "trial",
+    trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
   });
   return pressing;
 }
-async function loadMyPressing(){ const { data } = await sb.from("pressings").select("*").eq("owner_profile_id", state.profile.id).maybeSingle(); state.myPressing = data; }
+async function loadMyPressing(){
+  // Prend le plus ancien pour stabiliser en cas de doublons historiques
+  const { data } = await sb.from("pressings").select("*").eq("owner_profile_id", state.profile.id).order("created_at",{ascending:true}).limit(1).maybeSingle();
+  state.myPressing = data;
+}
 async function manualCreateMyPressing(){
   if(!state.profile) return;
   await ensurePressingForOwner(state.profile);
@@ -1288,61 +1307,124 @@ async function adminTogglePressingStatus(id, current){
 }
 async function refreshAdminPressings(){ await loadAdminPressings(); render(); }
 
-function openAdminCreate(){ state.adminCreateOpen = true; state.adminCreateError = null; render(); }
-function cancelAdminCreate(){ state.adminCreateOpen = false; state.adminCreateError = null; render(); }
+function openAdminCreate(){ state.adminCreateOpen = true; state.adminCreateError = null; state.adminCreateSuccess = null; render(); }
+function cancelAdminCreate(){ state.adminCreateOpen = false; state.adminCreateError = null; state.adminCreateSuccess = null; render(); }
+
+function normalizePhone(p){ return (p||"").replace(/[\s.\-()]/g,""); }
+
+async function ensureTrialSubscription(pressingId){
+  const { data: sub } = await sb.from("subscriptions").select("id,trial_end,current_period_end,manual_status").eq("pressing_id", pressingId).maybeSingle();
+  if(sub){
+    // Réactive si besoin
+    if(sub.manual_status === "suspended"){
+      await sb.from("subscriptions").update({ manual_status: "ok" }).eq("id", sub.id);
+    }
+    return sub;
+  }
+  const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
+  const { data: created } = await sb.from("subscriptions").insert({
+    pressing_id: pressingId, plan: "trial",
+    trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
+  }).select("*").single();
+  return created;
+}
 
 async function submitAdminCreatePressing(){
   const name = (document.getElementById("adminPressName")?.value || "").trim();
   const phone = (document.getElementById("adminPressPhone")?.value || "").trim();
-  const ownerEmail = (document.getElementById("adminPressOwnerEmail")?.value || "").trim().toLowerCase();
+  const ownerHint = (document.getElementById("adminPressOwnerEmail")?.value || "").trim();
   const address = (document.getElementById("adminPressAddress")?.value || "").trim() || null;
-  if(!name){ state.adminCreateError = "Le nom du pressing est obligatoire."; render(); return; }
+  if(!name){ state.adminCreateError = "Le nom du pressing est obligatoire."; state.adminCreateSuccess = null; render(); return; }
 
+  // 1) Chercher un profil propriétaire (par téléphone ou nom)
   let ownerId = null;
-  if(ownerEmail){
-    // Cherche un profil existant avec cet email (via profiles si l'email y est stocké, sinon on laisse null)
-    // Note: profiles table may not have email; we try best-effort by full_name or leave unassigned.
-    // Better: look for profiles with role=pressing that have no pressing yet is hard without email.
-    // We store owner_profile_id only if we can resolve it. Otherwise create unowned and admin can link later.
-    const { data: prows } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","pressing").limit(50);
-    // Fallback: if phone matches a profile, use it
-    if(phone && prows){
-      const match = prows.find(p => (p.phone||"").replace(/\s/g,"") === phone.replace(/\s/g,""));
-      if(match) ownerId = match.id;
+  const { data: prows } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","pressing").limit(100);
+  const phoneNorm = normalizePhone(phone);
+  const hintNorm = normalizePhone(ownerHint);
+  if(prows && prows.length){
+    let match = null;
+    if(phoneNorm) match = prows.find(p => normalizePhone(p.phone) === phoneNorm);
+    if(!match && hintNorm) match = prows.find(p => normalizePhone(p.phone) === hintNorm);
+    if(!match && ownerHint) match = prows.find(p => (p.full_name||"").toLowerCase().includes(ownerHint.toLowerCase()));
+    if(match) ownerId = match.id;
+  }
+
+  // 2) Chercher un pressing existant (même nom OU même téléphone) pour ÉVITER les doublons
+  let existing = null;
+  const { data: byName } = await sb.from("pressings").select("*").ilike("name", name).limit(5);
+  if(byName && byName.length){
+    // Priorité : même propriétaire, sinon même téléphone, sinon le plus ancien
+    existing = byName.find(p => ownerId && p.owner_profile_id === ownerId)
+      || (phoneNorm ? byName.find(p => normalizePhone(p.phone) === phoneNorm) : null)
+      || byName[0];
+  }
+  if(!existing && phoneNorm){
+    const { data: byPhone } = await sb.from("pressings").select("*").eq("phone", phone).limit(1).maybeSingle();
+    if(byPhone) existing = byPhone;
+    // Aussi essayer sans espaces
+    if(!existing){
+      const { data: allPh } = await sb.from("pressings").select("*").not("phone","is",null).limit(50);
+      existing = (allPh||[]).find(p => normalizePhone(p.phone) === phoneNorm) || null;
     }
   }
 
-  const { data: pressing, error } = await sb.from("pressings").insert({
-    name, phone: phone || null, address, owner_profile_id: ownerId, status: "active"
-  }).select("*").single();
-  if(error){
-    state.adminCreateError = "Erreur création : " + (error.message || "inconnue");
-    render(); return;
+  let pressing = existing;
+  let actionMsg = "";
+
+  if(existing){
+    // Mise à jour du pressing existant plutôt que création de doublon
+    const updates = { status: "active" };
+    if(phone) updates.phone = phone;
+    if(address) updates.address = address;
+    if(ownerId && !existing.owner_profile_id) updates.owner_profile_id = ownerId;
+    await sb.from("pressings").update(updates).eq("id", existing.id);
+    pressing = { ...existing, ...updates };
+    actionMsg = `Pressing « ${name} » déjà existant → mis à jour`;
+  } else {
+    const { data: created, error } = await sb.from("pressings").insert({
+      name, phone: phone || null, address, owner_profile_id: ownerId, status: "active"
+    }).select("*").single();
+    if(error){
+      state.adminCreateError = "Erreur création : " + (error.message || "inconnue");
+      state.adminCreateSuccess = null;
+      render(); return;
+    }
+    pressing = created;
+    actionMsg = `Nouveau pressing « ${name} » créé`;
   }
-  // Créer essai 30j
-  const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
-  await sb.from("subscriptions").insert({
-    pressing_id: pressing.id, plan: "trial",
-    trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
-  });
+
+  // 3) Toujours s'assurer d'un abonnement essai / actif
+  await ensureTrialSubscription(pressing.id);
+
   state.adminCreateOpen = false;
   state.adminCreateError = null;
+  state.adminCreateSuccess = actionMsg + " + essai 30 jours activé" + (ownerId ? " · propriétaire lié" : " · (aucun propriétaire trouvé, liez-le ensuite)");
   await loadAdminPressings();
   render();
+  // Efface le message de succès après quelques secondes
+  setTimeout(() => { if(state.adminCreateSuccess){ state.adminCreateSuccess = null; render(); } }, 6000);
 }
 
 async function adminLinkOwner(pressingId){
   const emailOrPhone = (document.getElementById("linkOwnerInput")?.value || "").trim();
   if(!emailOrPhone) return;
-  // Best effort: match by phone
   const { data: prows } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","pressing");
-  const clean = emailOrPhone.replace(/\s/g,"");
-  const match = (prows||[]).find(p => (p.phone||"").replace(/\s/g,"") === clean || (p.full_name||"").toLowerCase().includes(emailOrPhone.toLowerCase()));
+  const clean = normalizePhone(emailOrPhone);
+  const match = (prows||[]).find(p => normalizePhone(p.phone) === clean || (p.full_name||"").toLowerCase().includes(emailOrPhone.toLowerCase()));
   if(!match){
     alert("Aucun profil pressing trouvé avec ce téléphone ou nom. Demande à l'utilisateur de s'inscrire d'abord avec le rôle Pressing.");
     return;
   }
   await sb.from("pressings").update({ owner_profile_id: match.id }).eq("id", pressingId);
+  // S'assurer de l'abonnement
+  await ensureTrialSubscription(pressingId);
+  await loadAdminPressings();
+  render();
+}
+
+async function adminSuspendDuplicate(id){
+  if(!confirm("Suspendre ce doublon ? Il n'apparaîtra plus côté client.")) return;
+  await sb.from("pressings").update({ status: "suspended" }).eq("id", id);
   await loadAdminPressings();
   render();
 }
@@ -1365,6 +1447,8 @@ function renderAdminApp(){
       </div>
     </div>
 
+    ${state.adminCreateSuccess ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">✅ ${esc(state.adminCreateSuccess)}</div>` : ""}
+
     ${state.adminCreateOpen ? `
       <div class="card" style="margin-bottom:18px;border:2px solid var(--brand);background:linear-gradient(160deg,#f0fdf4,#fff);">
         <div style="font-weight:700;font-size:15px;margin-bottom:12px;">Nouveau réseau pressing</div>
@@ -1374,10 +1458,10 @@ function renderAdminApp(){
         <div class="field"><div class="field-label">Téléphone ou nom du propriétaire (pour lier automatiquement)</div><input type="text" id="adminPressOwnerEmail" placeholder="Numéro déjà inscrit en rôle Pressing" /></div>
         ${state.adminCreateError ? `<div class="error-msg">${esc(state.adminCreateError)}</div>` : ""}
         <div style="display:flex;gap:8px;margin-top:8px;">
-          <button class="btn btn-primary" style="flex:1;" onclick="submitAdminCreatePressing()">Créer + essai 30j</button>
+          <button class="btn btn-primary" style="flex:1;" onclick="submitAdminCreatePressing()">Créer / Mettre à jour + essai 30j</button>
           <button class="btn btn-secondary" style="width:auto;padding:10px 14px;" onclick="cancelAdminCreate()">Annuler</button>
         </div>
-        <p style="font-size:11px;color:var(--mutedLight);margin-top:10px;">Un abonnement essai de 30 jours est créé automatiquement. Le propriétaire pourra se connecter et accéder immédiatement au tableau de bord.</p>
+        <p style="font-size:11px;color:var(--mutedLight);margin-top:10px;">Si un pressing avec le même nom ou téléphone existe déjà, il sera mis à jour au lieu de créer un doublon. Un essai 30 jours est toujours assuré.</p>
       </div>
     ` : ""}
 
@@ -1397,11 +1481,12 @@ function renderAdminApp(){
         const sub = getSub(p); const info = computeSubStatus(sub);
         const badgeClass = info.status==='active' ? 'badge' : info.status==='trial' ? 'badge-amber' : 'badge-red';
         const badgeText = { active:"Actif", trial:"Essai", expired:"Expiré", suspended:"Suspendu", inconnu:"—" }[info.status] || info.status;
-        return `<div class="card hover-lift">
+        const isDupCandidate = state.adminPressings.filter(x => x.name && p.name && x.name.toLowerCase() === p.name.toLowerCase()).length > 1;
+        return `<div class="card hover-lift" style="${p.status!=='active' ? 'opacity:.65;' : ''}">
           <div class="header-row" onclick="adminSelectPressing('${p.id}')" style="cursor:pointer;">
             <div style="flex:1;">
-              <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
-              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.phone||'Pas de téléphone')} ${p.owner_profile_id ? '· Propriétaire lié' : '· <span style="color:#B42323;">Sans propriétaire</span>'}</div>
+              <div style="font-size:15px;font-weight:700;">${esc(p.name)} ${isDupCandidate ? '<span style="font-size:11px;color:#B42323;font-weight:600;">(doublon?)</span>' : ''}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.phone||'Pas de téléphone')} ${p.owner_profile_id ? '· Propriétaire lié' : '· <span style="color:#B42323;">Sans propriétaire</span>'} · <span style="font-size:10px;opacity:.7;">${(p.id||'').slice(0,8)}</span></div>
             </div>
             <span class="badge ${badgeClass}">${badgeText}${info.daysLeft!=null && info.status!=='expired' ? ' · ' + info.daysLeft + 'j' : ''}</span>
           </div>
@@ -1415,6 +1500,7 @@ function renderAdminApp(){
               <button class="btn ${sub?.manual_status==='suspended'?'btn-primary':'btn-danger'}" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="toggleSubscriptionSuspend('${p.id}','${sub?.manual_status||'ok'}')">
                 ${sub?.manual_status==='suspended' ? '▶ Réactiver abo' : '⏸ Suspendre abo'}
               </button>
+              ${isDupCandidate && p.status==='active' ? `<button class="btn btn-danger" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="event.stopPropagation();adminSuspendDuplicate('${p.id}')">🗑 Masquer doublon</button>` : ""}
             `}
           </div>
         </div>`;
