@@ -416,10 +416,27 @@ function renderTopBar(){
 }
 
 // =============================== NOTIFICATIONS ===============================
+let seenNotifIds = null;
 async function loadNotifications(){
   const { data } = await sb.from("notifications").select("*").eq("user_id", state.profile.id).order("created_at",{ascending:false}).limit(30);
   state.notifications = data || [];
   state.unreadCount = state.notifications.filter(n => !n.is_read).length;
+
+  // Notification système simple : dès qu'une notif non lue apparaît pour la
+  // première fois depuis l'ouverture de l'app, on affiche une vraie bannière
+  // native (fonctionne tant que le site reste ouvert, même en arrière-plan).
+  if(seenNotifIds === null){
+    seenNotifIds = new Set(state.notifications.map(n => n.id)); // 1er chargement : rien à notifier rétroactivement
+  } else {
+    const fresh = state.notifications.filter(n => !n.is_read && !seenNotifIds.has(n.id));
+    for(const n of fresh){
+      seenNotifIds.add(n.id);
+      if(typeof Notification !== "undefined" && Notification.permission === "granted"){
+        try{ new Notification(n.title, { body: n.message, icon: "/icon-192.png" }); } catch(e){}
+      }
+    }
+    state.notifications.forEach(n => seenNotifIds.add(n.id));
+  }
 }
 function toggleNotifPanel(){ state.notifOpen = !state.notifOpen; if(state.notifOpen) loadNotifications().then(render); else render(); }
 async function markNotifRead(id){
@@ -888,9 +905,10 @@ async function pressingAdvance(id){
 
 // ---- Configuration pressing (services + créneaux) ----
 async function openPressingConfig(){
-  await loadMyPressingConfig();
+  await Promise.all([loadMyPressingConfig(), loadPressingAgents()]);
   setState({ pressingConfigView:"main" });
 }
+async function refreshPressingAgents(){ await loadPressingAgents(); render(); }
 async function loadMyPressingConfig(){
   const pid = myPressingId();
   const [{ data: services }, { data: slots }] = await Promise.all([
@@ -943,7 +961,12 @@ function renderPressingConfig(){
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
 
-    <div style="font-size:14px;font-weight:700;margin:16px 0 8px;">Services & tarifs</div>
+    <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents</div>
+      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="refreshPressingAgents()">🔄</button></div>
+    ${state.pressingAgents.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun agent rattaché. Communique à ton agent le nom exact de ton pressing (${esc(state.myPressing?.name||'')}) — il le choisit lors de son inscription, ou depuis son tableau de bord s'il a déjà un compte.</p>` :
+      state.pressingAgents.map(a => `<div class="card"><div style="font-size:14px;font-weight:600;">${esc(a.profiles?.full_name || 'Agent')}</div><div style="font-size:12px;color:var(--muted);">${esc(a.phone||'')}</div></div>`).join("")}
+
+    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Services & tarifs</div>
     ${state.myServices.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun service. Ajoute-en un ci-dessous.</p>` :
       state.myServices.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
         <div><div style="font-size:14px;font-weight:700;">${esc(s.name)}</div><div style="font-size:12px;color:var(--muted);">${fcfa(s.price)} / ${esc(s.unit)}</div></div>
@@ -1183,6 +1206,7 @@ async function adminTogglePressingStatus(id, current){
   await sb.from("pressings").update({ status: current === "active" ? "suspended" : "active" }).eq("id", id);
   await loadAdminPressings(); render();
 }
+async function refreshAdminPressings(){ await loadAdminPressings(); render(); }
 
 function renderAdminApp(){
   if(state.adminSelectedPressingId){
@@ -1190,7 +1214,10 @@ function renderAdminApp(){
     return renderAdminPressingDetail(p);
   }
   return `<div class="screen">
-    <div style="margin-bottom:16px;"><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">Administration générale</div><div style="font-size:19px;font-family:'Fraunces',serif;">Tous les réseaux pressing</div></div>
+    <div class="header-row" style="margin-bottom:16px;">
+      <div><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">Administration générale</div><div style="font-size:19px;font-family:'Fraunces',serif;">Tous les réseaux pressing</div></div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="refreshAdminPressings()">🔄</button>
+    </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="val">${state.adminPressings.length}</div><div class="lab">Pressings inscrits</div></div>
       <div class="stat-card"><div class="val">${state.adminPressings.filter(p=>computeSubStatus(getSub(p)).status==='active').length}</div><div class="lab">Abonnements actifs</div></div>
@@ -1249,9 +1276,17 @@ function renderAdminPressingDetail(p){
 const VAPID_PUBLIC_KEY = "BCpkK6gvvxrMZsTitOi0JdTadB8CgilCBDpd1d6FOQLncuTKtL_1Cqtd6_0MZmkW5Bvw_k4nL6U1DZlh7eU7koM";
 
 function registerServiceWorker(){
+  requestNotificationPermission(); // méthode simple : marche tant que le site reste ouvert
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('/sw.js').then(reg => { subscribeToPush(reg); }).catch(() => {});
   }
+}
+async function requestNotificationPermission(){
+  try{
+    if(typeof Notification !== "undefined" && Notification.permission === "default"){
+      await Notification.requestPermission();
+    }
+  } catch(e){}
 }
 function urlBase64ToUint8Array(base64String){
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
