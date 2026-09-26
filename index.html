@@ -253,12 +253,20 @@ function clientPassSummary(profile){
 async function ensureClientPass(profile){
   // Initialise les crédits de bienvenue si les colonnes existent et sont nulles
   if(!profile || profile.role !== "client") return profile;
+  const meta = (state.session?.user?.user_metadata) || {};
+  const patch = {};
   if(profile.pass_credits == null && profile.pass_type == null){
-    const { data, error } = await sb.from("profiles").update({
-      pass_credits: PASS_WELCOME_CREDITS,
-      pass_type: "free",
-      pass_expiration: null
-    }).eq("id", profile.id).select("*").single();
+    patch.pass_credits = PASS_WELCOME_CREDITS;
+    patch.pass_type = "free";
+    patch.pass_expiration = null;
+  }
+  // Compléter téléphone / adresses depuis metadata d'inscription si absents en base
+  if(!(profile.phone||"").trim() && meta.phone) patch.phone = meta.phone;
+  if(!(profile.home_address||"").trim() && meta.home_address) patch.home_address = meta.home_address;
+  if(!(profile.work_address||"").trim() && meta.work_address) patch.work_address = meta.work_address;
+  if(!(profile.full_name||"").trim() && meta.full_name) patch.full_name = meta.full_name;
+  if(Object.keys(patch).length){
+    const { data, error } = await sb.from("profiles").update(patch).eq("id", profile.id).select("*").single();
     if(!error && data) return data;
   }
   return profile;
@@ -368,10 +376,11 @@ function freshState(){
     mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], myDeliverySlots:[], myReviews:[], draftService:null, draftSlot:null, draftDeliverySlot:null,
 
     myAgent:null, missions:[], joinablePressings:[],
+    pressingClients:[], pressingClientsError:null, pressingDashTab:"orders",
 
     campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
 
-    adminPressings:[], adminSelectedPressingId:null, adminOrders:[], paymentFormFor:null,
+    adminPressings:[], adminSelectedPressingId:null, adminOrders:[], adminPressingClients:[], paymentFormFor:null,
     adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
     adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
 
@@ -423,7 +432,7 @@ async function loadProfileAndRoute(retry){
       await ensurePressingForOwner(data);
       await loadMyPressing();
     }
-    if(state.myPressing){ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]); attachPressingRealtime(); }
+    if(state.myPressing){ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]); attachPressingRealtime(); }
   } else if(data.role === "agent"){
     await loadMyAgent();
     if(state.myAgent) await loadMissions(); else await loadJoinablePressings();
@@ -460,10 +469,29 @@ async function doSignup(payload){
   setState({ authLoading:true, authError:null, authInfo:null });
   const { data, error } = await sb.auth.signUp({
     email: payload.email, password: payload.password,
-    options: { data: { full_name: payload.fullName, phone: payload.phone, role: payload.role, pressing_id: payload.pressingId || null } }
+    options: { data: {
+      full_name: payload.fullName,
+      phone: payload.phone,
+      role: payload.role,
+      pressing_id: payload.pressingId || null,
+      home_address: payload.homeAddress || null,
+      work_address: payload.workAddress || null
+    } }
   });
   state.authLoading = false;
   if(error){ setState({ authError: error.message }); return; }
+  // Compléter le profil (téléphone + adresses) dès que la session est active
+  if(data?.user){
+    const patch = {
+      full_name: payload.fullName || null,
+      phone: payload.phone || null,
+      home_address: payload.homeAddress || null,
+      work_address: payload.workAddress || null
+    };
+    try{
+      await sb.from("profiles").update(patch).eq("id", data.user.id);
+    } catch(e){ console.warn("profile patch signup:", e); }
+  }
   if(data?.user && !data.session){ setState({ authInfo: "Compte créé. Vérifie ta boîte mail pour confirmer ton adresse avant de te connecter." }); }
   else if(data?.session){ state.session = data.session; await loadProfileAndRoute(); }
 }
@@ -541,6 +569,10 @@ function renderSignup(){
     <div class="field"><div class="field-label">Rôle</div>
       <select id="suRole" onchange="onSignupRoleChange()">${roleOptions.map(([v,l]) => `<option value="${v}">${l}</option>`).join("")}</select>
     </div>
+    <div id="clientAddressFields">
+      <div class="field"><div class="field-label">Adresse domicile</div><input type="text" id="suHomeAddress" placeholder="Quartier, rue, ville…" /></div>
+      <div class="field"><div class="field-label">Adresse travail / bureau (optionnel)</div><input type="text" id="suWorkAddress" placeholder="Lieu de travail si collecte au bureau" /></div>
+    </div>
     <div class="field" id="pressingPickerField" style="display:none;">
       <div class="field-label">Pressing à rejoindre</div>
       <select id="suPressingId">${state.signupPressings.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
@@ -551,12 +583,25 @@ function renderSignup(){
     <button class="btn btn-secondary" onclick="goAuthScreen('login')" style="margin-top:8px;">J'ai déjà un compte</button>
   </div>`;
 }
-function onSignupRoleChange(){ document.getElementById("pressingPickerField").style.display = document.getElementById("suRole").value==="agent" ? "block" : "none"; }
+function onSignupRoleChange(){
+  const role = document.getElementById("suRole").value;
+  const pf = document.getElementById("pressingPickerField");
+  const af = document.getElementById("clientAddressFields");
+  if(pf) pf.style.display = role === "agent" ? "block" : "none";
+  if(af) af.style.display = (role === "client" || role === "pressing") ? "block" : "none";
+}
 function submitSignup(){
   const role = document.getElementById("suRole").value;
-  doSignup({ fullName:document.getElementById("suFullName").value.trim(), phone:document.getElementById("suPhone").value.trim(),
-    email:document.getElementById("suEmail").value.trim(), password:document.getElementById("suPassword").value, role,
-    pressingId: role==="agent" ? document.getElementById("suPressingId").value : null });
+  doSignup({
+    fullName: document.getElementById("suFullName").value.trim(),
+    phone: document.getElementById("suPhone").value.trim(),
+    email: document.getElementById("suEmail").value.trim(),
+    password: document.getElementById("suPassword").value,
+    role,
+    homeAddress: (document.getElementById("suHomeAddress")?.value || "").trim() || null,
+    workAddress: (document.getElementById("suWorkAddress")?.value || "").trim() || null,
+    pressingId: role==="agent" ? document.getElementById("suPressingId").value : null
+  });
 }
 
 // =============================== RACINE ===============================
@@ -648,7 +693,45 @@ async function loadClientOrders(){
   state.orders = data || [];
 }
 async function enrollInNetwork(pressingId){
-  await sb.from("pressing_customers").upsert({ pressing_id: pressingId, customer_id: state.profile.id }, { onConflict:"pressing_id,customer_id" });
+  try{
+    const { error } = await sb.from("pressing_customers").upsert(
+      { pressing_id: pressingId, customer_id: state.profile.id, joined_at: new Date().toISOString() },
+      { onConflict: "pressing_id,customer_id" }
+    );
+    if(error) console.warn("enrollInNetwork:", error.message);
+  } catch(e){ console.warn("enrollInNetwork:", e.message); }
+}
+async function loadPressingClients(){
+  if(!state.myPressing?.id){ state.pressingClients = []; return; }
+  try{
+    const { data, error } = await sb.from("pressing_customers")
+      .select("customer_id, joined_at, profiles:customer_id(id, full_name, phone, home_address, work_address, email)")
+      .eq("pressing_id", state.myPressing.id)
+      .order("joined_at", { ascending: false });
+    if(error){
+      console.warn("loadPressingClients:", error.message);
+      // Repli : clients distincts des commandes
+      const fromOrders = [];
+      const seen = new Set();
+      for(const o of (state.pressingOrders || [])){
+        if(!o.customer_id || seen.has(o.customer_id)) continue;
+        seen.add(o.customer_id);
+        fromOrders.push({
+          customer_id: o.customer_id,
+          joined_at: o.created_at,
+          profiles: o.customer || { full_name: o.customer?.full_name, phone: o.customer?.phone }
+        });
+      }
+      state.pressingClients = fromOrders;
+      state.pressingClientsError = error.message;
+      return;
+    }
+    state.pressingClients = data || [];
+    state.pressingClientsError = null;
+  } catch(e){
+    state.pressingClients = [];
+    state.pressingClientsError = e.message;
+  }
 }
 async function loadClientCampaigns(pressingId){
   const { data } = await sb.from("campaigns").select("*, campaign_slots(*)").eq("pressing_id", pressingId).eq("status","published").gte("campaign_date", todayISO()).order("campaign_date");
@@ -704,6 +787,36 @@ function renderBottomNav(){
   const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["pass","Pass","🎫"],["history","Historique","🔁"]];
   return `<div class="bottom-nav">${items.map(([id,label,ic]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')"><span>${ic}</span><span>${label}</span></button>`).join("")}</div>`;
 }
+
+async function saveClientProfile(){
+  const phone = (document.getElementById("profPhone")?.value || "").trim();
+  const home = (document.getElementById("profHome")?.value || "").trim();
+  const work = (document.getElementById("profWork")?.value || "").trim();
+  const { data, error } = await sb.from("profiles").update({
+    phone: phone || null,
+    home_address: home || null,
+    work_address: work || null
+  }).eq("id", state.profile.id).select("*").single();
+  if(error){ alert("Erreur : " + error.message); return; }
+  state.profile = data;
+  alert("Profil mis à jour.");
+  render();
+}
+function renderClientProfileCard(){
+  const p = state.profile || {};
+  return `<div class="card" style="margin-top:14px;">
+    <div style="font-weight:700;font-size:14px;color:var(--brand-dark);margin-bottom:8px;">📍 Mes coordonnées</div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Visibles par ton pressing et l'admin pour les collectes.</p>
+    <div class="field" style="margin-bottom:8px;"><div class="field-label">Téléphone</div>
+      <input type="tel" id="profPhone" value="${esc(p.phone||"")}" placeholder="6XX XX XX XX" /></div>
+    <div class="field" style="margin-bottom:8px;"><div class="field-label">Adresse domicile</div>
+      <input type="text" id="profHome" value="${esc(p.home_address||"")}" placeholder="Quartier, rue…" /></div>
+    <div class="field" style="margin-bottom:8px;"><div class="field-label">Adresse travail (optionnel)</div>
+      <input type="text" id="profWork" value="${esc(p.work_address||"")}" placeholder="Bureau / lieu de travail" /></div>
+    <button class="btn btn-secondary" style="margin:0;" onclick="saveClientProfile()">Enregistrer mes coordonnées</button>
+  </div>`;
+}
+
 async function clientGo(screen){
   if(screen === "book" && !state.selectedPressingId){ setState({ clientScreen:"choosePressing" }); return; }
   state.clientScreen = screen; render();
@@ -740,6 +853,7 @@ function renderClientHome(){
     <a class="wa-btn" href="https://wa.me/${(state.clientConfig?.pressing?.whatsapp||'').replace(/\D/g,'')}" target="_blank">💬 Contacter le pressing sur WhatsApp</a>
   </div>
   ${renderReviewsForClient()}
+  ${renderClientProfileCard()}
   `;
 }
 function renderReviewsForClient(){
@@ -941,6 +1055,15 @@ async function bookingConfirm(){
     if(itemRows.length) await sb.from("order_items").insert(itemRows);
     // Décompte d'un crédit après succès de la réservation
     await deductPassCredit();
+    // Lier le client au pressing (visible dans "Mes clients")
+    if(state.selectedPressingId) await enrollInNetwork(state.selectedPressingId);
+    // Si pas d'adresse domicile au profil, enregistrer celle de la collecte
+    if(b.mode === "domicile" && b.address && !(state.profile.home_address||"").trim()){
+      try{
+        const { data: upd } = await sb.from("profiles").update({ home_address: b.address }).eq("id", state.profile.id).select("*").single();
+        if(upd) state.profile = upd;
+      } catch(e){}
+    }
     await loadClientOrders();
     state.activeOrderId = order.id; state.bookingSubmitting = false;
     setState({ clientScreen: "track" });
@@ -1174,7 +1297,7 @@ async function manualCreateMyPressing(){
   await ensurePressingForOwner(state.profile);
   await loadMyPressing();
   if(state.myPressing){
-    await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription()]);
+    await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]);
     attachPressingRealtime();
   }
   render();
@@ -1195,7 +1318,7 @@ async function loadPressingOrders(){
   if(!error) state.pressingOrdersError = null;
   const custIds = [...new Set(orders.map(o => o.customer_id).filter(Boolean))];
   if(custIds.length){
-    const { data: profs } = await sb.from("profiles").select("id,full_name,phone").in("id", custIds);
+    const { data: profs } = await sb.from("profiles").select("id,full_name,phone,home_address,work_address").in("id", custIds);
     const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
     orders.forEach(o => { o.customer = byId[o.customer_id] || null; });
   }
@@ -1258,6 +1381,11 @@ function renderPressingApp(){
       <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='en_traitement').length}</div><div class="lab">En traitement</div></div>
       <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='pret').length}</div><div class="lab">Prêtes</div></div>
     </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button class="chip ${state.pressingDashTab!=='clients'?'active':''}" onclick="setState({pressingDashTab:'orders'})">📦 Commandes</button>
+      <button class="chip ${state.pressingDashTab==='clients'?'active':''}" onclick="setState({pressingDashTab:'clients'}); loadPressingClients().then(render);">👥 Clients (${(state.pressingClients||[]).length})</button>
+    </div>
+    ${state.pressingDashTab === "clients" ? renderPressingClientsList() : `
     <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Commandes</div>
     ${state.pressingOrdersError ? `<div class="banner-danger" style="margin-bottom:12px;">Impossible de charger les commandes (droits RLS). Exécute PASS_SQL_MIGRATION.sql dans Supabase.<br/><span style="font-size:12px;">${esc(state.pressingOrdersError)}</span></div>` : ""}
     ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.${state.myPressing ? `<div style="font-size:12px;margin-top:8px;color:var(--mutedLight);">Pressing ID : ${(state.myPressing.id||'').slice(0,8)}…</div>` : ""}</div>` :
@@ -1267,7 +1395,39 @@ function renderPressingApp(){
           <span class="badge">${STATUS_LABELS[o.order_status]}</span><span style="font-size:12px;color:var(--muted);">${fcfa(o.final_amount || o.estimated_amount)}</span>
         </div>
       </div>`).join("")}
+    `}
   </div>`;
+}
+function renderPressingClientsList(){
+  const list = state.pressingClients || [];
+  if(state.pressingClientsError){
+    return `<div class="banner-danger" style="margin-bottom:12px;">Chargement clients partiel (RLS). Exécute CLIENTS_SQL_MIGRATION.sql.<br/><span style="font-size:12px;">${esc(state.pressingClientsError)}</span></div>`
+      + (list.length ? renderPressingClientCards(list) : `<div class="empty">Aucun client inscrit pour ce pressing.</div>`);
+  }
+  if(!list.length) return `<div class="empty">Aucun client n'a encore rejoint ton pressing.<br/><span style="font-size:13px;color:var(--muted);">Dès qu'un client choisit ton pressing, il apparaît ici avec nom, téléphone et adresses.</span></div>`;
+  return renderPressingClientCards(list);
+}
+function renderPressingClientCards(list){
+  return `<div style="font-size:14px;font-weight:700;margin-bottom:10px;">Clients connectés (${list.length})</div>`
+    + list.map(row => {
+      const c = row.profiles || {};
+      const name = c.full_name || "Client";
+      const phone = c.phone || "";
+      const home = c.home_address || "";
+      const work = c.work_address || "";
+      return `<div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:var(--brand-dark);">${esc(name)}</div>
+            ${phone ? `<div style="font-size:13px;margin-top:4px;"><a href="tel:${esc(phone)}" style="color:var(--brand);font-weight:600;">☎ ${esc(phone)}</a></div>` : `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Pas de téléphone</div>`}
+          </div>
+          ${row.joined_at ? `<div style="font-size:11px;color:var(--mutedLight);">${new Date(row.joined_at).toLocaleDateString("fr-FR")}</div>` : ""}
+        </div>
+        ${home ? `<div style="margin-top:10px;padding:8px 10px;background:var(--brand-soft);border-radius:10px;font-size:13px;"><span style="font-weight:600;color:var(--brand-dark);">🏠 Domicile</span><br/>${esc(home)}</div>` : ""}
+        ${work ? `<div style="margin-top:6px;padding:8px 10px;background:#f5f5f7;border-radius:10px;font-size:13px;"><span style="font-weight:600;">💼 Travail</span><br/>${esc(work)}</div>` : ""}
+        ${!home && !work ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;">Adresse non renseignée</div>` : ""}
+      </div>`;
+    }).join("");
 }
 function pressingSelect(id){ setState({ pressingSelectedOrderId:id }); }
 function pressingBack(){ setState({ pressingSelectedOrderId:null }); }
@@ -1278,6 +1438,8 @@ function renderPressingOrderDetail(order){
       <div class="info-row"><div style="flex:1;"><div class="lab">Client</div><div class="val">${esc(order.customer?.full_name || '—')}</div></div>
         ${order.customer?.phone ? `<a href="tel:${order.customer.phone}" class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;">☎ ${esc(order.customer.phone)}</a>` : ""}
       </div>
+      ${order.customer?.home_address ? `<div class="info-row"><div class="lab">🏠 Domicile</div><div class="val">${esc(order.customer.home_address)}</div></div>` : ""}
+      ${order.customer?.work_address ? `<div class="info-row"><div class="lab">💼 Travail</div><div class="val">${esc(order.customer.work_address)}</div></div>` : ""}
       <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}${order.pickupSlot ? ` · ${esc(order.pickupSlot.label)}${order.pickupSlot.zone_label?' — '+esc(order.pickupSlot.zone_label):''} (${order.pickupSlot.start_time.slice(0,5)}–${order.pickupSlot.end_time.slice(0,5)})${order.pickupSlot.landmark?'<br/><span style="font-size:12px;color:var(--muted)">'+esc(order.pickupSlot.landmark)+'</span>':''}` : ' · sans créneau fixe'}</div></div></div>
       <div class="info-row"><div><div class="lab">Livraison</div><div class="val">${order.deliverySlot ? `${esc(order.deliverySlot.label)}${order.deliverySlot.zone_label?' — '+esc(order.deliverySlot.zone_label):''} (${order.deliverySlot.start_time.slice(0,5)}–${order.deliverySlot.end_time.slice(0,5)})${order.deliverySlot.landmark?'<br/><span style="font-size:12px;color:var(--muted)">'+esc(order.deliverySlot.landmark)+'</span>':''}` : 'Pas encore de créneau fixe'}</div></div></div>
       <div class="info-row"><div><div class="lab">Quantité</div><div class="val">${order.quantity_count ? order.quantity_count + ' article(s)' : (order.quantity_estimate || "—")}</div></div></div>
@@ -1595,7 +1757,7 @@ async function loadMissions(){
   const missions = [...pickups, ...deliveries].filter(o => !["termine","annule"].includes(o.order_status));
   const custIds = [...new Set(missions.map(m => m.customer_id).filter(Boolean))];
   if(custIds.length){
-    const { data: profs } = await sb.from("profiles").select("id,full_name,phone").in("id", custIds);
+    const { data: profs } = await sb.from("profiles").select("id,full_name,phone,home_address,work_address").in("id", custIds);
     const byId = {}; (profs||[]).forEach(p => byId[p.id] = p);
     missions.forEach(m => { m.customer = byId[m.customer_id] || null; });
   }
@@ -1660,7 +1822,22 @@ async function loadAdminOrders(pressingId){
   const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", pressingId).order("created_at",{ascending:false});
   state.adminOrders = data || [];
 }
-async function adminSelectPressing(id){ state.adminSelectedPressingId = id; state.adminCreateOpen = false; await loadAdminOrders(id); render(); }
+async function adminSelectPressing(id){
+  state.adminSelectedPressingId = id;
+  state.adminCreateOpen = false;
+  await Promise.all([loadAdminOrders(id), loadAdminPressingClients(id)]);
+  render();
+}
+async function loadAdminPressingClients(pressingId){
+  try{
+    const { data, error } = await sb.from("pressing_customers")
+      .select("customer_id, joined_at, profiles:customer_id(id, full_name, phone, home_address, work_address)")
+      .eq("pressing_id", pressingId)
+      .order("joined_at", { ascending: false });
+    if(error){ console.warn(error.message); state.adminPressingClients = []; return; }
+    state.adminPressingClients = data || [];
+  } catch(e){ state.adminPressingClients = []; }
+}
 function getSub(p){ return Array.isArray(p.subscriptions) ? p.subscriptions[0] : p.subscriptions; }
 function openPaymentForm(id){ state.paymentFormFor = id; render(); }
 function cancelPaymentForm(){ state.paymentFormFor = null; render(); }
@@ -2272,6 +2449,18 @@ function renderAdminPressingDetail(p){
         ${p.status==='active' ? 'Désactiver le compte' : 'Réactiver le compte'}
       </button>
     </div>
+
+    <div style="font-size:15px;font-weight:700;margin:18px 0 10px;font-family:'Playfair Display',Georgia,serif;">Clients du pressing (${(state.adminPressingClients||[]).length})</div>
+    ${(state.adminPressingClients||[]).length===0 ? `<div class="empty" style="margin-bottom:14px;">Aucun client inscrit à ce pressing.</div>` :
+      state.adminPressingClients.map(row => {
+        const c = row.profiles || {};
+        return `<div class="card" style="margin-bottom:8px;">
+          <div style="font-weight:700;">${esc(c.full_name||"Client")}</div>
+          ${c.phone ? `<div style="font-size:13px;margin-top:4px;"><a href="tel:${esc(c.phone)}">☎ ${esc(c.phone)}</a></div>` : ""}
+          ${c.home_address ? `<div style="font-size:12px;margin-top:6px;color:var(--muted);">🏠 ${esc(c.home_address)}</div>` : ""}
+          ${c.work_address ? `<div style="font-size:12px;margin-top:4px;color:var(--muted);">💼 ${esc(c.work_address)}</div>` : ""}
+        </div>`;
+      }).join("")}
 
     <div style="font-size:15px;font-weight:700;margin:18px 0 10px;font-family:'Playfair Display',Georgia,serif;">Commandes récentes</div>
     ${state.adminOrders.length===0 ? `<div class="empty">Aucune commande pour ce pressing.</div>` :
