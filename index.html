@@ -1180,8 +1180,19 @@ async function manualCreateMyPressing(){
   render();
 }
 async function loadPressingOrders(){
-  const { data } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false});
-  const orders = data || [];
+  if(!state.myPressing?.id){ state.pressingOrders = []; return; }
+  const { data, error } = await sb.from("orders").select("*, order_items(*)").eq("pressing_id", state.myPressing.id).order("created_at",{ascending:false});
+  if(error){
+    console.error("loadPressingOrders:", error.message);
+    // Repli : toutes les commandes visibles puis filtre
+    const { data: all } = await sb.from("orders").select("*, order_items(*)").order("created_at",{ascending:false}).limit(100);
+    const ordersFallback = (all||[]).filter(o => o.pressing_id === state.myPressing.id);
+    state.pressingOrders = ordersFallback;
+    if(!ordersFallback.length) state.pressingOrdersError = error.message;
+    else state.pressingOrdersError = null;
+  }
+  const orders = (!error && data) ? data : (state.pressingOrders || []);
+  if(!error) state.pressingOrdersError = null;
   const custIds = [...new Set(orders.map(o => o.customer_id).filter(Boolean))];
   if(custIds.length){
     const { data: profs } = await sb.from("profiles").select("id,full_name,phone").in("id", custIds);
@@ -1248,7 +1259,8 @@ function renderPressingApp(){
       <div class="stat-card"><div class="val">${state.pressingOrders.filter(o=>o.order_status==='pret').length}</div><div class="lab">Prêtes</div></div>
     </div>
     <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Commandes</div>
-    ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.</div>` :
+    ${state.pressingOrdersError ? `<div class="banner-danger" style="margin-bottom:12px;">Impossible de charger les commandes (droits RLS). Exécute PASS_SQL_MIGRATION.sql dans Supabase.<br/><span style="font-size:12px;">${esc(state.pressingOrdersError)}</span></div>` : ""}
+    ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.${state.myPressing ? `<div style="font-size:12px;margin-top:8px;color:var(--mutedLight);">Pressing ID : ${(state.myPressing.id||'').slice(0,8)}…</div>` : ""}</div>` :
       state.pressingOrders.map(o => `<div class="order-card" onclick="pressingSelect('${o.id}')">
         <div class="top"><div><div style="font-size:14px;font-weight:700;">${o.order_number}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div><span style="color:var(--mutedLight);">›</span></div>
         <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
@@ -1815,12 +1827,20 @@ async function adminSuspendDuplicate(id){
 // ---- Admin : validation des recharges Pass ----
 async function loadAdminPassRequests(){
   let rows = [];
-  // 1) Table dédiée
+  // 1) RPC sécurisée (contourne RLS si migrée)
   try{
-    const { data, error } = await sb.from("pass_recharge_requests").select("*").order("created_at",{ascending:false}).limit(50);
-    if(error) console.warn("pass_recharge_requests:", error.message);
-    else rows = data || [];
-  } catch(e){ console.warn("pass_recharge_requests fetch:", e.message); }
+    const { data, error } = await sb.rpc("admin_list_pass_requests");
+    if(!error && data) rows = data;
+    else if(error) console.warn("admin_list_pass_requests:", error.message);
+  } catch(e){ console.warn("rpc pass requests:", e.message); }
+  // 2) Table directe
+  if(!rows.length){
+    try{
+      const { data, error } = await sb.from("pass_recharge_requests").select("*").order("created_at",{ascending:false}).limit(50);
+      if(error) console.warn("pass_recharge_requests:", error.message);
+      else rows = data || [];
+    } catch(e){ console.warn("pass_recharge_requests fetch:", e.message); }
+  }
 
   // 2) File de secours : notifications admin structurées PASS_REQ::
   try{
@@ -1930,14 +1950,34 @@ async function adminManualCredit(){
   const mode = document.getElementById("manualCreditMode")?.value || "credits";
   const qty = Number(document.getElementById("manualCreditQty")?.value || 0);
   if(!phoneOrName || qty <= 0){ alert("Indique le client et une quantité > 0."); return; }
-  const { data: clients } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","client").limit(100);
-  const clean = phoneOrName.replace(/\s/g,"");
-  const match = (clients||[]).find(c =>
-    (c.phone||"").replace(/\s/g,"") === clean ||
-    (c.full_name||"").toLowerCase().includes(phoneOrName.toLowerCase())
-  );
-  if(!match){ alert("Aucun client trouvé avec ce téléphone ou nom."); return; }
-  if(!confirm(`Créditer ${match.full_name} : ${mode==="days"? qty+" jours illimités" : "+"+qty+" réservations"} ?`)) return;
+  let clients = [];
+  // RPC admin (recommandé après migration SQL)
+  try{
+    const { data, error } = await sb.rpc("admin_list_clients");
+    if(!error && data) clients = data;
+    else if(error) console.warn("admin_list_clients:", error.message);
+  } catch(e){}
+  if(!clients.length){
+    const { data, error } = await sb.from("profiles").select("id,full_name,phone,role").eq("role","client").limit(200);
+    if(error){ alert("Impossible de lister les clients (RLS). Exécute PASS_SQL_MIGRATION.sql dans Supabase.\n"+error.message); return; }
+    clients = data || [];
+  }
+  if(!clients.length){
+    alert("Aucun client visible. Vérifie que le SQL de migration a été exécuté et que des comptes role=client existent.");
+    return;
+  }
+  const clean = phoneOrName.replace(/\s/g,"").toLowerCase();
+  const match = clients.find(c => {
+    const ph = (c.phone||"").replace(/\s/g,"").toLowerCase();
+    const nm = (c.full_name||"").toLowerCase();
+    return ph === clean || ph.includes(clean) || clean.includes(ph) || nm.includes(phoneOrName.toLowerCase());
+  });
+  if(!match){
+    const sample = clients.slice(0,5).map(c => (c.full_name||"?")+" / "+(c.phone||"—")).join("\n");
+    alert("Aucun client trouvé pour « "+phoneOrName+" ».\nExemples en base :\n"+sample);
+    return;
+  }
+  if(!confirm(`Créditer ${match.full_name} (${match.phone||"sans tél."}) : ${mode==="days"? qty+" jours illimités" : "+"+qty+" réservations"} ?`)) return;
   try{
     await creditClientPass(match.id, mode==="credits"?qty:null, mode==="days"?qty:null);
     alert("Client crédité avec succès.");
