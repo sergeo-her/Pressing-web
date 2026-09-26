@@ -175,6 +175,21 @@ const PLAN_LABELS = { mensuel:"Mensuel — 2 500 FCFA", trimestriel:"3 mois — 
 const PLAN_DURATIONS = { mensuel:30, trimestriel:90, semestriel:182, annuel:425 };
 const PLAN_AMOUNTS = { mensuel:2500, trimestriel:7500, semestriel:15000, annuel:30000 };
 
+// ---- Pass Rechargement (forfait de réservations client) ----
+const PLATFORM_MOMO = {
+  orange: { phone: "691495135", label: "Orange Money", name: "Serge Hervé Moudio Koung" },
+  mtn:    { phone: "676979407", label: "MTN MoMo",     name: "Serge Hervé Moudio Koung" },
+};
+const PASS_WELCOME_CREDITS = 5;
+// Tarifs par défaut — modifiables côté admin (stockés dans platform_settings)
+const PASS_PACKS_DEFAULT = {
+  pack_10: { id:"pack_10", label:"Pass 10 réservations", price:250, credits:10, days:null, desc:"Idéal pour les besoins ponctuels." },
+  unlimited_30: { id:"unlimited_30", label:"Pass Illimité 30 jours", price:500, credits:null, days:30, desc:"Réservations illimitées pendant 30 jours." },
+};
+function getPassPacks(){
+  return state.passPacks || PASS_PACKS_DEFAULT;
+}
+
 function fcfa(n){ return (n||0).toLocaleString("fr-FR") + " FCFA"; }
 function nextStatus(cur){ const i = STATUS_FLOW.indexOf(cur); return (i===-1||i===STATUS_FLOW.length-1) ? cur : STATUS_FLOW[i+1]; }
 function esc(s){ return String(s==null?"":s).replace(/"/g,"&quot;"); }
@@ -205,6 +220,89 @@ function computeSubStatus(sub){
   return { status:"expired", daysLeft:null };
 }
 
+// ---- Pass client helpers ----
+function clientHasActivePass(profile){
+  if(!profile) return false;
+  if(profile.pass_type === "unlimited" && profile.pass_expiration){
+    return new Date(profile.pass_expiration) > new Date();
+  }
+  return (profile.pass_credits || 0) > 0;
+}
+function clientPassSummary(profile){
+  if(!profile) return { label:"—", credits:0, unlimited:false, daysLeft:null };
+  if(profile.pass_type === "unlimited" && profile.pass_expiration){
+    const daysLeft = Math.ceil((new Date(profile.pass_expiration) - new Date())/86400000);
+    if(daysLeft >= 0) return { label:"Illimité", credits:null, unlimited:true, daysLeft };
+  }
+  const credits = profile.pass_credits || 0;
+  return { label: credits + " réservation" + (credits>1?"s":""), credits, unlimited:false, daysLeft:null };
+}
+async function ensureClientPass(profile){
+  // Initialise les crédits de bienvenue si les colonnes existent et sont nulles
+  if(!profile || profile.role !== "client") return profile;
+  if(profile.pass_credits == null && profile.pass_type == null){
+    const { data, error } = await sb.from("profiles").update({
+      pass_credits: PASS_WELCOME_CREDITS,
+      pass_type: "free",
+      pass_expiration: null
+    }).eq("id", profile.id).select("*").single();
+    if(!error && data) return data;
+  }
+  return profile;
+}
+async function deductPassCredit(){
+  const p = state.profile;
+  if(!p) return false;
+  // Illimité actif : pas de décompte
+  if(p.pass_type === "unlimited" && p.pass_expiration && new Date(p.pass_expiration) > new Date()){
+    return true;
+  }
+  const credits = p.pass_credits || 0;
+  if(credits <= 0) return false;
+  const { data, error } = await sb.from("profiles").update({
+    pass_credits: credits - 1
+  }).eq("id", p.id).select("*").single();
+  if(error || !data){ console.error("Décompte crédit:", error); return false; }
+  state.profile = data;
+  return true;
+}
+
+async function loadPassSettings(){
+  // Charge les tarifs depuis platform_settings (clé pass_prices)
+  // Fallback : tarifs par défaut si table absente ou vide
+  try{
+    const { data, error } = await sb.from("platform_settings").select("value").eq("key","pass_prices").maybeSingle();
+    if(error || !data?.value){
+      state.passPacks = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
+      return;
+    }
+    const saved = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
+    const packs = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
+    if(saved.pack_10_price != null) packs.pack_10.price = Number(saved.pack_10_price);
+    if(saved.unlimited_30_price != null) packs.unlimited_30.price = Number(saved.unlimited_30_price);
+    state.passPacks = packs;
+  } catch(e){
+    state.passPacks = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
+  }
+}
+
+async function savePassPrices(pack10Price, unlimitedPrice){
+  const value = {
+    pack_10_price: Number(pack10Price),
+    unlimited_30_price: Number(unlimitedPrice)
+  };
+  // Upsert dans platform_settings
+  const { data: existing } = await sb.from("platform_settings").select("id").eq("key","pass_prices").maybeSingle();
+  let error;
+  if(existing){
+    ({ error } = await sb.from("platform_settings").update({ value, updated_at: new Date().toISOString() }).eq("key","pass_prices"));
+  } else {
+    ({ error } = await sb.from("platform_settings").insert({ key:"pass_prices", value }));
+  }
+  if(error) throw error;
+  await loadPassSettings();
+}
+
 function freshState(){
   return {
     view:"loading", authScreen:"login", authError:null, authInfo:null, authLoading:false, signupPressings:[],
@@ -213,6 +311,8 @@ function freshState(){
     pressingsList:[], selectedPressingId:null, clientConfig:null, clientScreen:"choosePressing",
     orders:[], activeOrderId:null, booking:null, bookingError:null, bookingSubmitting:false,
     clientCampaigns:[], confirmedCampaigns:{}, featuredReviews:[], reviewFormOpen:false, draftReview:null,
+    passSelectedPack:null, passRequestNote:"", passRequestSubmitting:false, passRequestSuccess:null, passRequestError:null,
+    passPacks:null, adminPassPricesEdit:false, adminPassPriceDraft:null, adminPassPriceMsg:null,
 
     myPressing:null, pressingOrders:[], pressingAgents:[], pressingSelectedOrderId:null, realtimeChannel:null,
     mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], myDeliverySlots:[], myReviews:[], draftService:null, draftSlot:null, draftDeliverySlot:null,
@@ -223,6 +323,7 @@ function freshState(){
 
     adminPressings:[], adminSelectedPressingId:null, adminOrders:[], paymentFormFor:null,
     adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
+    adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
 
     notifications:[], unreadCount:0, notifOpen:false,
   };
@@ -262,8 +363,9 @@ async function loadProfileAndRoute(retry){
   state = fresh;
 
   if(data.role === "client"){
+    state.profile = await ensureClientPass(data);
     state.clientScreen = "choosePressing";
-    await Promise.all([loadPressingsListForClient(), loadClientOrders()]);
+    await Promise.all([loadPressingsListForClient(), loadClientOrders(), loadPassSettings()]);
   } else if(data.role === "pressing"){
     await loadMyPressing();
     if(!state.myPressing){
@@ -276,7 +378,7 @@ async function loadProfileAndRoute(retry){
     await loadMyAgent();
     if(state.myAgent) await loadMissions(); else await loadJoinablePressings();
   } else if(data.role === "admin"){
-    await loadAdminPressings();
+    await Promise.all([loadAdminPressings(), loadAdminPassRequests(), loadPassSettings()]);
   }
   await loadNotifications();
   if(notifPollTimer) clearInterval(notifPollTimer);
@@ -506,11 +608,12 @@ async function loadClientCampaigns(pressingId){
 function renderClientApp(){
   if(state.clientScreen === "choosePressing") return renderChoosePressing();
   if(state.reviewFormOpen) return renderReviewForm();
+  if(state.clientScreen === "pass") return renderTopTabs() + renderPassScreen() + renderBottomNav();
   const content = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory }[state.clientScreen]();
   return renderTopTabs() + content + renderBottomNav();
 }
 function renderTopTabs(){
-  const items = [["home","Accueil"],["book","Réserver"],["track","Suivi"],["history","Historique"]];
+  const items = [["home","Accueil"],["book","Réserver"],["track","Suivi"],["pass","Mon Pass"],["history","Historique"]];
   return `<div class="top-tabs">${items.map(([id,label]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')">${label}</button>`).join("")}</div>`;
 }
 function renderChoosePressing(){
@@ -547,7 +650,7 @@ async function loadFeaturedReviews(pressingId){
   state.featuredReviews = data || [];
 }
 function renderBottomNav(){
-  const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["history","Historique","🔁"]];
+  const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["pass","Pass","🎫"],["history","Historique","🔁"]];
   return `<div class="bottom-nav">${items.map(([id,label,ic]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')"><span>${ic}</span><span>${label}</span></button>`).join("")}</div>`;
 }
 async function clientGo(screen){
@@ -560,6 +663,8 @@ async function clientGo(screen){
 function renderClientHome(){
   const pName = state.clientConfig?.pressing?.name || "";
   const pPhone = state.clientConfig?.pressing?.phone || "";
+  const pass = clientPassSummary(state.profile);
+  const hasPass = clientHasActivePass(state.profile);
   return `
   <div class="hero">
     <div class="tag">Pressing connecté${pName ? " · " + esc(pName) : ""}</div>
@@ -567,6 +672,15 @@ function renderClientHome(){
     <p>Nous récupérons vos vêtements chez vous, les confions au pressing et vous les rapportons une fois prêts.</p>
     <button class="btn btn-amber" onclick="clientGo('book')">Faire récupérer mes vêtements</button>
     <button class="btn btn-outline-white" onclick="setState({clientScreen:'choosePressing'})">Changer de pressing</button>
+  </div>
+  <div class="screen" style="padding-bottom:0;">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-bottom:4px;" onclick="clientGo('pass')">
+      <div>
+        <div style="font-size:12px;color:var(--muted);font-weight:600;">Mon Pass</div>
+        <div style="font-size:15px;font-weight:700;">${hasPass ? (pass.unlimited ? `Illimité · ${pass.daysLeft} j` : `${pass.credits} réservation(s)`) : "Aucun crédit — recharger"}</div>
+      </div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;font-size:12px;">🎫 Pass</button>
+    </div>
   </div>
   ${renderCampaignsForClient()}
   <div class="screen">
@@ -743,6 +857,11 @@ async function bookingConfirm(){
   setState({ bookingSubmitting:true, bookingError:null });
   const b = state.booking; const cfg = state.clientConfig;
   try{
+    // Vérification Pass Rechargement
+    if(!clientHasActivePass(state.profile)){
+      setState({ bookingSubmitting:false, bookingError:null, clientScreen:"pass", passRequestError:"Tu n'as plus de crédits. Recharge ton Pass pour réserver." });
+      return;
+    }
     let pickupAddressId = null;
     if(b.mode === "domicile"){
       const zone = cfg.zones.find(z => z.id === b.zoneId);
@@ -768,6 +887,8 @@ async function bookingConfirm(){
       return { order_id: order.id, service_id: svcId, item_name: svc?.name, quantity: qty, unit_price: svc?.price||0, total_price: (svc?.price||0)*qty };
     });
     if(itemRows.length) await sb.from("order_items").insert(itemRows);
+    // Décompte d'un crédit après succès de la réservation
+    await deductPassCredit();
     await loadClientOrders();
     state.activeOrderId = order.id; state.bookingSubmitting = false;
     setState({ clientScreen: "track" });
@@ -811,6 +932,126 @@ function renderHistory(){
         <div style="font-size:12px;color:var(--muted);margin-top:4px;">${esc(o.pressings?.name||'')} · ${fcfa(o.final_amount || o.estimated_amount)}</div>
       </div>`).join("")}
   </div>`;
+}
+
+// =============================== PASS RECHARGEMENT (CLIENT) ===============================
+function renderPassScreen(){
+  const summary = clientPassSummary(state.profile);
+  const hasPass = clientHasActivePass(state.profile);
+  const packs = getPassPacks();
+  return `<div class="screen">
+    <div style="margin-bottom:18px;">
+      <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;font-weight:700;">Mon Pass</div>
+      <div style="font-size:22px;font-family:'Fraunces',serif;font-weight:700;">Rechargement</div>
+    </div>
+
+    <div class="card" style="background:linear-gradient(145deg,var(--ink) 0%,#1a2f1f 100%);color:#fff;border:none;margin-bottom:18px;">
+      <div style="font-size:12px;opacity:.75;font-weight:600;margin-bottom:6px;">Solde actuel</div>
+      <div style="font-size:28px;font-family:'Fraunces',serif;font-weight:700;">
+        ${summary.unlimited ? `Illimité` : `${summary.credits ?? 0}`}
+        <span style="font-size:15px;font-weight:500;opacity:.85;">${summary.unlimited ? (summary.daysLeft!=null ? `· ${summary.daysLeft} j restants` : "") : " réservation(s)"}</span>
+      </div>
+      <div style="font-size:12px;opacity:.7;margin-top:8px;">
+        ${hasPass ? "Tu peux réserver un créneau maintenant." : "Recharge pour continuer à réserver."}
+      </div>
+    </div>
+
+    ${state.passRequestSuccess ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);">✅ ${esc(state.passRequestSuccess)}</div>` : ""}
+    ${state.passRequestError ? `<div class="error-msg">${esc(state.passRequestError)}</div>` : ""}
+
+    <div style="font-size:14px;font-weight:700;margin-bottom:10px;">Choisir un forfait</div>
+    ${Object.values(packs).map(pack => {
+      const selected = state.passSelectedPack === pack.id;
+      return `<div class="card" style="cursor:pointer;border-color:${selected?'var(--brand)':'var(--border)'};background:${selected?'var(--brand-soft)':'#fff'};" onclick="setState({passSelectedPack:'${pack.id}',passRequestError:null})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+          <div>
+            <div style="font-size:15px;font-weight:700;">${esc(pack.label)}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px;">${esc(pack.desc)}</div>
+          </div>
+          <div style="font-size:16px;font-weight:800;color:var(--brand-dark);white-space:nowrap;">${fcfa(pack.price)}</div>
+        </div>
+        ${selected ? `<div style="margin-top:10px;font-size:11px;font-weight:600;color:var(--brand-dark);">✓ Sélectionné</div>` : ""}
+      </div>`;
+    }).join("")}
+
+    ${state.passSelectedPack && packs[state.passSelectedPack] ? `
+      <div class="card" style="background:#FFFBEB;border-color:#F0AC3D;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Comment payer ?</div>
+        <p style="font-size:13px;margin:0 0 10px;color:var(--ink2);">Envoie <strong>${fcfa(packs[state.passSelectedPack].price)}</strong> à l'un de ces numéros :</p>
+        <div style="font-size:13px;line-height:1.75;color:var(--ink2);margin-bottom:10px;">
+          <div style="padding:10px 12px;background:#fff;border-radius:10px;border:1px solid #f0e0b0;margin-bottom:8px;">
+            <strong>🟠 ${PLATFORM_MOMO.orange.label}</strong><br/>
+            <span style="font-size:16px;font-weight:800;letter-spacing:.02em;">${PLATFORM_MOMO.orange.phone}</span><br/>
+            <span style="font-size:12px;color:var(--muted);">Nom affiché : ${esc(PLATFORM_MOMO.orange.name)}</span>
+          </div>
+          <div style="padding:10px 12px;background:#fff;border-radius:10px;border:1px solid #f0e0b0;">
+            <strong>🟡 ${PLATFORM_MOMO.mtn.label}</strong><br/>
+            <span style="font-size:16px;font-weight:800;letter-spacing:.02em;">${PLATFORM_MOMO.mtn.phone}</span><br/>
+            <span style="font-size:12px;color:var(--muted);">Nom affiché : ${esc(PLATFORM_MOMO.mtn.name)}</span>
+          </div>
+        </div>
+        <ol style="margin:0;padding-left:18px;font-size:13px;color:var(--ink2);line-height:1.7;">
+          <li>Référence du dépôt : <strong>${esc(state.profile.full_name || "Ton nom")}</strong></li>
+          <li>Clique sur le bouton ci-dessous après l'envoi</li>
+        </ol>
+        <div class="field" style="margin-top:12px;margin-bottom:8px;">
+          <div class="field-label">Note (optionnel) — n° de transaction</div>
+          <input type="text" id="passNoteInput" value="${esc(state.passRequestNote||'')}" placeholder="Ex: OM-123456 ou heure d'envoi" oninput="state.passRequestNote=this.value" />
+        </div>
+        <button class="btn btn-primary" style="margin-top:4px;" onclick="submitPassRechargeRequest()" ${state.passRequestSubmitting?'disabled':''}>
+          ${state.passRequestSubmitting ? "Envoi..." : "J'ai envoyé le paiement"}
+        </button>
+      </div>
+    ` : `<p style="font-size:13px;color:var(--mutedLight);">Sélectionne un forfait pour afficher les instructions de paiement.</p>`}
+
+    <p style="font-size:11px;color:var(--mutedLight);margin-top:14px;line-height:1.5;">
+      À la création de ton compte, tu as reçu <strong>${PASS_WELCOME_CREDITS} réservations gratuites</strong>. L'admin valide manuellement chaque recharge après réception du Mobile Money.
+    </p>
+  </div>`;
+}
+
+async function submitPassRechargeRequest(){
+  const packs = getPassPacks();
+  const packId = state.passSelectedPack;
+  if(!packId || !packs[packId]){ setState({ passRequestError:"Choisis un forfait." }); return; }
+  const pack = packs[packId];
+  setState({ passRequestSubmitting:true, passRequestError:null, passRequestSuccess:null });
+  try{
+    const note = (document.getElementById("passNoteInput")?.value || state.passRequestNote || "").trim();
+    // Table dédiée (à créer en SQL) — fallback notification admin si échec
+    const { error } = await sb.from("pass_recharge_requests").insert({
+      user_id: state.profile.id,
+      pack_id: pack.id,
+      amount: pack.price,
+      credits: pack.credits,
+      days: pack.days,
+      note: note || null,
+      status: "pending",
+      user_name: state.profile.full_name,
+      user_phone: state.profile.phone
+    });
+    if(error){
+      // Fallback : notification pour tous les admins (si table absente)
+      console.warn("pass_recharge_requests insert:", error.message);
+      const { data: admins } = await sb.from("profiles").select("id").eq("role","admin").limit(10);
+      if(admins && admins.length){
+        await sb.from("notifications").insert(admins.map(a => ({
+          user_id: a.id,
+          title: "Demande de recharge Pass",
+          message: `${state.profile.full_name || "Client"} · ${pack.label} · ${fcfa(pack.price)}${note ? " · "+note : ""}`,
+          is_read: false
+        })));
+      }
+    }
+    setState({
+      passRequestSubmitting:false,
+      passRequestSuccess: "Demande envoyée ! L'admin validera ta recharge dès réception du paiement.",
+      passSelectedPack: null,
+      passRequestNote: ""
+    });
+  } catch(e){
+    setState({ passRequestSubmitting:false, passRequestError: e.message || "Erreur lors de l'envoi." });
+  }
 }
 
 // =============================== PRESSING ===============================
@@ -1429,14 +1670,67 @@ async function adminSuspendDuplicate(id){
   render();
 }
 
+// ---- Admin : validation des recharges Pass ----
+async function loadAdminPassRequests(){
+  const { data, error } = await sb.from("pass_recharge_requests").select("*").order("created_at",{ascending:false}).limit(50);
+  if(error){ console.warn("pass_recharge_requests:", error.message); state.adminPassRequests = []; return; }
+  state.adminPassRequests = data || [];
+}
+async function adminApprovePass(reqId){
+  const req = state.adminPassRequests.find(r => r.id === reqId);
+  if(!req || req.status !== "pending") return;
+  if(!confirm(`Valider la recharge « ${req.pack_id} » pour ${req.user_name || "ce client"} ?`)) return;
+  // Créditer le profil client
+  const { data: prof } = await sb.from("profiles").select("*").eq("id", req.user_id).single();
+  if(!prof){ alert("Profil client introuvable."); return; }
+  let updates = {};
+  if(req.days){
+    const base = (prof.pass_type === "unlimited" && prof.pass_expiration && new Date(prof.pass_expiration) > new Date())
+      ? new Date(prof.pass_expiration) : new Date();
+    base.setDate(base.getDate() + req.days);
+    updates = { pass_type: "unlimited", pass_expiration: base.toISOString(), pass_credits: prof.pass_credits || 0 };
+  } else {
+    const add = req.credits || 0;
+    updates = { pass_type: "pack", pass_credits: (prof.pass_credits || 0) + add, pass_expiration: null };
+  }
+  const { error: upErr } = await sb.from("profiles").update(updates).eq("id", req.user_id);
+  if(upErr){ alert("Erreur crédit : " + upErr.message); return; }
+  await sb.from("pass_recharge_requests").update({ status:"approved", processed_at: new Date().toISOString() }).eq("id", reqId);
+  // Notifier le client
+  await sb.from("notifications").insert({
+    user_id: req.user_id,
+    title: "Pass rechargé ✓",
+    message: req.days
+      ? `Ton Pass Illimité (${req.days} jours) est actif.`
+      : `+${req.credits} réservation(s) ajoutée(s) à ton Pass.`,
+    is_read: false
+  });
+  await loadAdminPassRequests();
+  render();
+}
+async function adminRejectPass(reqId){
+  if(!confirm("Refuser cette demande de recharge ?")) return;
+  await sb.from("pass_recharge_requests").update({ status:"rejected", processed_at: new Date().toISOString() }).eq("id", reqId);
+  await loadAdminPassRequests();
+  render();
+}
+function adminGoView(v){
+  state.adminView = v;
+  state.adminSelectedPressingId = null;
+  if(v === "pass") loadAdminPassRequests().then(render);
+  else render();
+}
+
 function renderAdminApp(){
   if(state.adminSelectedPressingId){
     const p = state.adminPressings.find(x => x.id === state.adminSelectedPressingId);
     if(!p){ state.adminSelectedPressingId = null; return renderAdminApp(); }
     return renderAdminPressingDetail(p);
   }
+  if(state.adminView === "pass") return renderAdminPassView();
+
   return `<div class="screen">
-    <div class="header-row" style="margin-bottom:16px;">
+    <div class="header-row" style="margin-bottom:12px;">
       <div>
         <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
         <div style="font-size:22px;font-family:'Fraunces',serif;font-weight:700;">Réseaux pressing</div>
@@ -1445,6 +1739,10 @@ function renderAdminApp(){
         <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="refreshAdminPressings()" title="Actualiser">🔄</button>
         <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="openAdminCreate()">+ Créer</button>
       </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="btn ${state.adminView!=='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
+      <button class="btn ${state.adminView==='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass clients ${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length ? `(${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length})` : ""}</button>
     </div>
 
     ${state.adminCreateSuccess ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">✅ ${esc(state.adminCreateSuccess)}</div>` : ""}
@@ -1507,6 +1805,119 @@ function renderAdminApp(){
       }).join("")}
   </div>`;
 }
+
+function renderAdminPassView(){
+  const pending = (state.adminPassRequests||[]).filter(r => r.status === "pending");
+  const done = (state.adminPassRequests||[]).filter(r => r.status !== "pending");
+  const packs = getPassPacks();
+  const draft = state.adminPassPriceDraft || { pack10: packs.pack_10.price, unlimited: packs.unlimited_30.price };
+  return `<div class="screen">
+    <div class="header-row" style="margin-bottom:12px;">
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
+        <div style="font-size:22px;font-family:'Fraunces',serif;font-weight:700;">Pass clients</div>
+      </div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="loadAdminPassRequests().then(render)">🔄</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
+      <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass clients ${pending.length?`(${pending.length})`:""}</button>
+    </div>
+
+    <!-- Tarifs modifiables -->
+    <div class="card" style="border-color:var(--brand);background:linear-gradient(160deg,#f0fdf4,#fff);margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-weight:700;font-size:14px;">💰 Tarifs des forfaits</div>
+        ${!state.adminPassPricesEdit ? `<button class="btn btn-secondary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;" onclick="setState({adminPassPricesEdit:true,adminPassPriceDraft:{pack10:getPassPacks().pack_10.price,unlimited:getPassPacks().unlimited_30.price},adminPassPriceMsg:null})">Modifier</button>` : ""}
+      </div>
+      ${state.adminPassPriceMsg ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:10px;">${esc(state.adminPassPriceMsg)}</div>` : ""}
+      ${state.adminPassPricesEdit ? `
+        <div class="field"><div class="field-label">Pass 10 réservations (FCFA)</div>
+          <input type="number" id="adminPricePack10" value="${draft.pack10}" min="0" step="50" />
+        </div>
+        <div class="field"><div class="field-label">Pass Illimité 30 jours (FCFA)</div>
+          <input type="number" id="adminPriceUnlimited" value="${draft.unlimited}" min="0" step="50" />
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" style="flex:1;margin:0;" onclick="submitAdminPassPrices()">Enregistrer les tarifs</button>
+          <button class="btn btn-secondary" style="width:auto;padding:10px 14px;margin:0;" onclick="setState({adminPassPricesEdit:false,adminPassPriceMsg:null})">Annuler</button>
+        </div>
+        <p style="font-size:11px;color:var(--mutedLight);margin-top:8px;">Les nouveaux prix s'appliquent immédiatement pour les clients. Les demandes déjà en attente gardent le montant demandé.</p>
+      ` : `
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:120px;padding:10px 12px;background:#fff;border-radius:10px;border:1px solid var(--border);">
+            <div style="font-size:11px;color:var(--muted);font-weight:600;">10 réservations</div>
+            <div style="font-size:18px;font-weight:800;color:var(--brand-dark);">${fcfa(packs.pack_10.price)}</div>
+          </div>
+          <div style="flex:1;min-width:120px;padding:10px 12px;background:#fff;border-radius:10px;border:1px solid var(--border);">
+            <div style="font-size:11px;color:var(--muted);font-weight:600;">Illimité 30 j</div>
+            <div style="font-size:18px;font-weight:800;color:var(--brand-dark);">${fcfa(packs.unlimited_30.price)}</div>
+          </div>
+        </div>
+      `}
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="val">${pending.length}</div><div class="lab">En attente</div></div>
+      <div class="stat-card"><div class="val">${done.filter(r=>r.status==='approved').length}</div><div class="lab">Validées</div></div>
+    </div>
+
+    <div style="font-size:14px;font-weight:700;margin:8px 0 10px;">Demandes en attente</div>
+    ${pending.length===0 ? `<div class="empty">Aucune demande de recharge en attente.</div>` :
+      pending.map(r => {
+        const pack = packs[r.pack_id] || { label: r.pack_id, price: r.amount };
+        return `<div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;">${esc(r.user_name || "Client")}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(r.user_phone||"")} · ${esc(pack.label)} · ${fcfa(r.amount||pack.price)}</div>
+              ${r.note ? `<div style="font-size:12px;margin-top:4px;color:var(--ink2);">Note : ${esc(r.note)}</div>` : ""}
+              <div style="font-size:11px;color:var(--mutedLight);margin-top:4px;">${r.created_at ? new Date(r.created_at).toLocaleString("fr-FR") : ""}</div>
+            </div>
+            <span class="badge badge-amber">En attente</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="btn btn-primary" style="flex:1;margin:0;padding:10px;" onclick="adminApprovePass('${r.id}')">✓ Valider</button>
+            <button class="btn btn-danger" style="width:auto;margin:0;padding:10px 14px;" onclick="adminRejectPass('${r.id}')">Refuser</button>
+          </div>
+        </div>`;
+      }).join("")}
+
+    ${done.length ? `
+      <div style="font-size:14px;font-weight:700;margin:18px 0 10px;">Historique récent</div>
+      ${done.slice(0,15).map(r => `<div class="card" style="opacity:.85;">
+        <div style="display:flex;justify-content:space-between;">
+          <div>
+            <div style="font-size:13px;font-weight:600;">${esc(r.user_name||"Client")} · ${esc((packs[r.pack_id]||{}).label || r.pack_id)}</div>
+            <div style="font-size:11px;color:var(--muted);">${fcfa(r.amount)} · ${r.created_at ? new Date(r.created_at).toLocaleDateString("fr-FR") : ""}</div>
+          </div>
+          <span class="badge ${r.status==='approved'?'badge':'badge-red'}">${r.status==='approved'?'Validé':'Refusé'}</span>
+        </div>
+      </div>`).join("")}
+    ` : ""}
+  </div>`;
+}
+
+async function submitAdminPassPrices(){
+  const p10 = Number(document.getElementById("adminPricePack10")?.value);
+  const unl = Number(document.getElementById("adminPriceUnlimited")?.value);
+  if(isNaN(p10) || p10 < 0 || isNaN(unl) || unl < 0){
+    setState({ adminPassPriceMsg: "Prix invalides." });
+    return;
+  }
+  try{
+    await savePassPrices(p10, unl);
+    setState({
+      adminPassPricesEdit: false,
+      adminPassPriceDraft: null,
+      adminPassPriceMsg: `✅ Tarifs enregistrés : 10 rés. = ${fcfa(p10)} · Illimité = ${fcfa(unl)}`
+    });
+    setTimeout(() => { if(state.adminPassPriceMsg){ state.adminPassPriceMsg = null; render(); } }, 4000);
+  } catch(e){
+    setState({ adminPassPriceMsg: "Erreur : " + (e.message || "impossible d'enregistrer. Vérifie la table platform_settings.") });
+  }
+}
+
 function renderAdminPressingDetail(p){
   const revenue = state.adminOrders.reduce((s,o) => s + (o.final_amount || o.estimated_amount || 0), 0);
   const sub = getSub(p); const info = computeSubStatus(sub);
@@ -1643,6 +2054,7 @@ function handlePopState(){
   }
   if(role === "admin"){
     if(state.adminSelectedPressingId){ state.adminSelectedPressingId = null; render(); return; }
+    if(state.adminView === "pass"){ state.adminView = "pressings"; render(); return; }
   }
 }
 window.addEventListener("popstate", handlePopState);
