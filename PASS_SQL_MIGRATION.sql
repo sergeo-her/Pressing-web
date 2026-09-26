@@ -1,12 +1,15 @@
 -- ============================================================
--- Pass Rechargement — migration SQL (Supabase SQL Editor)
+-- Pass Rechargement — migration SQL complète (à RE-exécuter)
+-- Supabase → SQL Editor → Run
 -- ============================================================
 
+-- 1) Colonnes profiles
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS pass_credits INT DEFAULT 5,
   ADD COLUMN IF NOT EXISTS pass_type VARCHAR(32) DEFAULT 'free',
   ADD COLUMN IF NOT EXISTS pass_expiration TIMESTAMPTZ NULL;
 
+-- 2) Demandes de recharge
 CREATE TABLE IF NOT EXISTS pass_recharge_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
@@ -21,7 +24,6 @@ CREATE TABLE IF NOT EXISTS pass_recharge_requests (
   created_at TIMESTAMPTZ DEFAULT now(),
   processed_at TIMESTAMPTZ NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_pass_req_status ON pass_recharge_requests(status);
 CREATE INDEX IF NOT EXISTS idx_pass_req_user ON pass_recharge_requests(user_id);
 ALTER TABLE pass_recharge_requests ENABLE ROW LEVEL SECURITY;
@@ -42,6 +44,7 @@ CREATE POLICY "admin all pass requests"
   USING (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.role = 'admin'))
   WITH CHECK (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.role = 'admin'));
 
+-- 3) Profiles update (crédits)
 DROP POLICY IF EXISTS "clients update own pass fields" ON profiles;
 CREATE POLICY "clients update own pass fields"
   ON profiles FOR UPDATE TO authenticated
@@ -52,6 +55,7 @@ CREATE POLICY "admin update profiles"
   ON profiles FOR UPDATE TO authenticated
   USING (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.role = 'admin'));
 
+-- 4) Settings tarifs
 CREATE TABLE IF NOT EXISTS platform_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   key TEXT UNIQUE NOT NULL,
@@ -70,7 +74,6 @@ CREATE POLICY "admin write platform_settings"
   USING (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.role = 'admin'))
   WITH CHECK (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.role = 'admin'));
 
--- Forfaits par défaut : 5@500, 10@1000, illimité 365j@5000
 INSERT INTO platform_settings (key, value)
 VALUES ('pass_prices', '{
   "packs": {
@@ -80,6 +83,23 @@ VALUES ('pass_prices', '{
   }
 }'::jsonb)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+
+-- 5) Notifications : permettre aux clients d'envoyer une notif aux admins
+-- (nécessaire pour la file de secours des demandes Pass)
+DROP POLICY IF EXISTS "users insert notifications" ON notifications;
+CREATE POLICY "users insert notifications"
+  ON notifications FOR INSERT TO authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "users read own notifications" ON notifications;
+CREATE POLICY "users read own notifications"
+  ON notifications FOR SELECT TO authenticated
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "users update own notifications" ON notifications;
+CREATE POLICY "users update own notifications"
+  ON notifications FOR UPDATE TO authenticated
+  USING (auth.uid() = user_id);
 
 UPDATE profiles
 SET pass_credits = 5, pass_type = 'free'
