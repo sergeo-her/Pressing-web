@@ -384,7 +384,7 @@ function freshState(){
     adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
     adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
 
-    notifications:[], unreadCount:0, notifOpen:false,
+    notifications:[], unreadCount:0, notifOpen:false, pushEnabled:false, pushBannerDismissed:false, _swReg:null,
   };
 }
 let state = freshState();
@@ -442,6 +442,8 @@ async function loadProfileAndRoute(retry){
   await loadNotifications();
   if(notifPollTimer) clearInterval(notifPollTimer);
   notifPollTimer = setInterval(loadNotifications, 25000);
+  // Push natif après connexion
+  ensurePushSubscription();
   render();
 }
 
@@ -614,7 +616,8 @@ function renderRoot(){
   else if(role === "pressing") body = renderPressingApp();
   else if(role === "agent") body = renderAgentApp();
   else if(role === "admin") body = renderAdminApp();
-  return renderTopBar() + body;
+  const pushBanner = renderPushBanner();
+  return renderTopBar() + (pushBanner || "") + body;
 }
 function renderTopBar(){
   const roleLabel = { client:"Client", pressing:"Réseau pressing", agent:"Agent", admin:"Administration plateforme" }[state.profile.role];
@@ -648,7 +651,14 @@ async function loadNotifications(){
     for(const n of fresh){
       seenNotifIds.add(n.id);
       if(typeof Notification !== "undefined" && Notification.permission === "granted"){
-        try{ new Notification(n.title, { body: n.message, icon: "/icon-192.png" }); } catch(e){}
+        let body = n.message || "";
+        if(body.startsWith("PASS_REQ::")){
+          try{
+            const j = JSON.parse(body.slice(9));
+            body = (j.user_name||"Client")+" · "+(j.pack_id||"")+(j.amount?" · "+j.amount+" FCFA":"");
+          }catch(e){ body = "Demande de recharge Pass"; }
+        }
+        try{ new Notification(n.title, { body, icon: "/icon-192.png", tag: "pc-"+n.id }); } catch(e){}
       }
     }
     state.notifications.forEach(n => seenNotifIds.add(n.id));
@@ -670,9 +680,18 @@ function renderNotifPanel(){
       <button style="font-size:11px;color:var(--teal);font-weight:600;" onclick="markAllNotifRead()">Tout marquer lu</button>
     </div>
     ${state.notifications.length===0 ? `<div style="padding:20px;text-align:center;font-size:12px;color:var(--mutedLight);">Rien pour le moment.</div>` :
-      state.notifications.map(n => `<div class="notif-item ${n.is_read?'':'unread'}" onclick="markNotifRead('${n.id}')">
-        <div class="t">${esc(n.title)}</div><div class="m">${esc(n.message)}</div><div class="d">${timeAgo(n.created_at)}</div>
-      </div>`).join("")}
+      state.notifications.map(n => {
+        let msg = n.message || "";
+        if(msg.startsWith("PASS_REQ::")){
+          try{
+            const j = JSON.parse(msg.slice(9));
+            msg = (j.user_name||"Client")+" · "+(j.pack_id||"")+" · "+(j.amount?j.amount+" FCFA":"")+(j.note?" · "+j.note:"");
+          }catch(e){ msg = "Demande de recharge Pass"; }
+        }
+        return `<div class="notif-item ${n.is_read?'':'unread'}" onclick="markNotifRead('${n.id}')">
+        <div class="t">${esc(n.title)}</div><div class="m">${esc(msg)}</div><div class="d">${timeAgo(n.created_at)}</div>
+      </div>`;
+      }).join("")}
   </div>`;
 }
 
@@ -1053,6 +1072,17 @@ async function bookingConfirm(){
       return { order_id: order.id, service_id: svcId, item_name: svc?.name, quantity: qty, unit_price: svc?.price||0, total_price: (svc?.price||0)*qty };
     });
     if(itemRows.length) await sb.from("order_items").insert(itemRows);
+    // Notifier le pressing (DB + push native)
+    try{
+      const pressing = state.clientConfig?.pressing || state.pressingsList?.find(x => x.id === state.selectedPressingId);
+      const ownerId = pressing?.owner_profile_id;
+      if(ownerId){
+        const title = "Nouvelle demande reçue";
+        const message = "Commande "+(order.order_number||"")+" — collecte prévue le "+(order.pickup_date||"");
+        await sb.from("notifications").insert({ user_id: ownerId, title, message, is_read:false });
+        await sendNativePush([ownerId], title, message, "/");
+      }
+    } catch(e){ console.warn("notif pressing:", e.message); }
     // Décompte d'un crédit après succès de la réservation
     await deductPassCredit();
     // Lier le client au pressing (visible dans "Mes clients")
@@ -1233,6 +1263,8 @@ async function submitPassRechargeRequest(){
         message: structured,
         is_read: false
       })));
+      await sendNativePush(admins.map(a => a.id), "Demande de recharge Pass",
+        (state.profile.full_name||"Client")+" · "+pack.label+" · "+fcfa(pack.price), "/");
     }
     if(!tableOk && (!admins || !admins.length)){
       setState({ passRequestSubmitting:false, passRequestError: "Impossible d'envoyer la demande (table ou admin introuvable). Contacte le support." });
@@ -1534,6 +1566,10 @@ async function saveFinalAmount(id){ await sb.from("orders").update({ final_amoun
 async function assignAgent(orderId, agentId){
   await sb.from("pickup_requests").insert({ order_id: orderId, agent_id: agentId, scheduled_at: new Date().toISOString() });
   await sb.from("orders").update({ order_status: "collecte_programmee" }).eq("id", orderId);
+  const order = state.pressingOrders.find(o => o.id === orderId);
+  if(order?.customer_id){
+    await notifyUser(order.customer_id, "Collecte programmée", "Votre commande "+(order.order_number||"")+" a une collecte programmée.", "/");
+  }
   await loadPressingOrders(); render();
 }
 async function pressingAdvance(id){
@@ -1541,6 +1577,10 @@ async function pressingAdvance(id){
   const status = nextStatus(order.order_status);
   await sb.from("orders").update({ order_status: status, updated_at: new Date().toISOString() }).eq("id", id);
   await sb.from("order_status_history").insert({ order_id:id, status, changed_by: state.profile.id });
+  if(order?.customer_id){
+    const label = (STATUS_LABELS && STATUS_LABELS[status]) || status;
+    await notifyUser(order.customer_id, "Commande mise à jour", (order.order_number||"")+" — "+label, "/");
+  }
   await loadPressingOrders(); render();
 }
 
@@ -2474,51 +2514,166 @@ function renderAdminPressingDetail(p){
   </div>`;
 }
 
-// =============================== PWA & WEB PUSH ===============================
+// =============================== PWA & WEB PUSH NATIF ===============================
+// Clé publique VAPID (à apparier avec VAPID_PRIVATE_KEY côté Edge Function)
 const VAPID_PUBLIC_KEY = "BCpkK6gvvxrMZsTitOi0JdTadB8CgilCBDpd1d6FOQLncuTKtL_1Cqtd6_0MZmkW5Bvw_k4nL6U1DZlh7eU7koM";
 
 function registerServiceWorker(){
-  requestNotificationPermission(); // méthode simple : marche tant que le site reste ouvert
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/sw.js').then(reg => { subscribeToPush(reg); }).catch(() => {});
-  }
+  if(!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.register("/sw.js", { scope: "/" })
+    .then(reg => { state._swReg = reg; if(state.profile) ensurePushSubscription(); })
+    .catch(e => console.warn("SW:", e.message));
 }
-async function requestNotificationPermission(){
-  try{
-    if(typeof Notification !== "undefined" && Notification.permission === "default"){
-      await Notification.requestPermission();
-    }
-  } catch(e){}
-}
+
 function urlBase64ToUint8Array(base64String){
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const raw = atob(base64);
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
-async function subscribeToPush(reg){
+
+async function ensurePushSubscription(){
   try{
-    if(!("PushManager" in window)) return;
-    const permission = await Notification.requestPermission();
-    if(permission !== "granted") return;
+    if(!("Notification" in window) || !("PushManager" in window)) return false;
+    if(!state.profile) return false;
+    if(Notification.permission === "denied") return false;
+    if(Notification.permission === "default"){
+      // Ne force pas immédiatement : le bandeau UI le proposera
+      return false;
+    }
+    const reg = state._swReg || await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub){
-      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
     }
     const j = sub.toJSON();
-    if(state.profile){
-      await sb.from("push_subscriptions").upsert({
-        user_id: state.profile.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth
-      }, { onConflict:"endpoint" });
+    const { error } = await sb.from("push_subscriptions").upsert({
+      user_id: state.profile.id,
+      endpoint: j.endpoint,
+      p256dh: j.keys.p256dh,
+      auth: j.keys.auth,
+      user_agent: navigator.userAgent.slice(0, 180),
+      updated_at: new Date().toISOString()
+    }, { onConflict: "endpoint" });
+    if(error) console.warn("push_subscriptions:", error.message);
+    else {
+      state.pushEnabled = true;
+      try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
     }
-  } catch(e){ console.warn("Push non disponible :", e.message); }
+    return !error;
+  } catch(e){
+    console.warn("Push:", e.message);
+    return false;
+  }
 }
+
+async function enablePushFromUI(){
+  try{
+    if(!("Notification" in window)){
+      alert("Les notifications ne sont pas supportées sur cet appareil / navigateur.");
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if(perm !== "granted"){
+      alert("Permission refusée. Vous pourrez l'activer plus tard dans les réglages du navigateur.");
+      state.pushBannerDismissed = true;
+      render();
+      return;
+    }
+    const ok = await ensurePushSubscription();
+    if(ok){
+      // Notification de test locale
+      try{
+        new Notification("Pressing Connecté", {
+          body: "Notifications activées ✓ Vous serez alerté des nouvelles commandes et messages.",
+          icon: "/icon-192.png"
+        });
+      } catch(e){}
+      state.pushBannerDismissed = true;
+      state.pushEnabled = true;
+      render();
+    } else {
+      alert("Impossible d'enregistrer l'abonnement push. Vérifiez la table push_subscriptions (SQL) et réessayez.");
+    }
+  } catch(e){
+    alert("Erreur : " + (e.message || e));
+  }
+}
+
+function dismissPushBanner(){
+  state.pushBannerDismissed = true;
+  try{ localStorage.setItem("pc_push_dismiss", "1"); }catch(e){}
+  render();
+}
+
+function shouldShowPushBanner(){
+  if(state.pushBannerDismissed || state.pushEnabled) return false;
+  if(typeof Notification === "undefined") return false;
+  if(Notification.permission === "granted") return false;
+  if(Notification.permission === "denied") return false;
+  try{ if(localStorage.getItem("pc_push_dismiss") === "1") return false; }catch(e){}
+  return state.view === "app" && !!state.profile;
+}
+
+function renderPushBanner(){
+  if(!shouldShowPushBanner()) return "";
+  return `<div class="card" style="margin:10px 16px 0;border-color:var(--brand);background:var(--brand-soft);display:flex;gap:12px;align-items:flex-start;">
+    <div style="font-size:22px;">🔔</div>
+    <div style="flex:1;">
+      <div style="font-weight:700;font-size:14px;color:var(--brand-dark);">Activer les notifications</div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 10px;">Recevez une alerte même quand l'app est fermée (nouvelles commandes, Pass, messages).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="enablePushFromUI()">Activer</button>
+        <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="dismissPushBanner()">Plus tard</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/** Envoie une push native via Edge Function (si déployée). Échec silencieux si absente. */
+async function sendNativePush(userIds, title, body, url){
+  if(!userIds || !userIds.length) return;
+  try{
+    const { data: { session } } = await sb.auth.getSession();
+    if(!session) return;
+    const base = (sb.supabaseUrl || "").replace(/\/$/, "");
+    await fetch(base + "/functions/v1/send-push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + session.access_token,
+        "apikey": sb.supabaseKey || ""
+      },
+      body: JSON.stringify({ user_ids: userIds, title, body: body || "", url: url || "/" })
+    });
+  } catch(e){
+    console.warn("sendNativePush:", e.message);
+  }
+}
+
+/** Insert notification DB + tentative push native */
+async function notifyUser(userId, title, message, url){
+  try{
+    await sb.from("notifications").insert({
+      user_id: userId,
+      title,
+      message: message || "",
+      is_read: false
+    });
+  } catch(e){ console.warn("notify insert:", e.message); }
+  await sendNativePush([userId], title, message, url);
+}
+
 let deferredInstallPrompt = null;
-window.addEventListener('beforeinstallprompt', (e) => {
+window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
-  const fab = document.createElement('div');
-  fab.className = 'install-fab'; fab.id = 'installFab'; fab.textContent = "📲 Installer l'app";
+  if(document.getElementById("installFab")) return;
+  const fab = document.createElement("div");
+  fab.className = "install-fab"; fab.id = "installFab"; fab.textContent = "📲 Installer l'app";
   fab.onclick = async () => { fab.remove(); deferredInstallPrompt.prompt(); };
   document.body.appendChild(fab);
 });
