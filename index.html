@@ -2516,7 +2516,7 @@ function renderAdminPressingDetail(p){
 
 // =============================== PWA & WEB PUSH NATIF ===============================
 // Clé publique VAPID (à apparier avec VAPID_PRIVATE_KEY côté Edge Function)
-const VAPID_PUBLIC_KEY = "BCpkK6gvvxrMZsTitOi0JdTadB8CgilCBDpd1d6FOQLncuTKtL_1Cqtd6_0MZmkW5Bvw_k4nL6U1DZlh7eU7koM";
+const VAPID_PUBLIC_KEY = "BC1OHhfJz4lfJ2OXzNrCsGzwbXi51pdHKcmccRLIiRgujgPteHEwyUJ_1dcdMBqF4wMSR7Ztn8pEwc1XxO-34zQ";
 
 function registerServiceWorker(){
   if(!("serviceWorker" in navigator)) return;
@@ -2639,7 +2639,7 @@ async function sendNativePush(userIds, title, body, url){
   try{
     const { data: { session } } = await sb.auth.getSession();
     if(!session) return;
-    const base = (sb.supabaseUrl || "").replace(/\/$/, "");
+    const base = (typeof SUPABASE_URL !== "undefined" ? SUPABASE_URL : (sb.supabaseUrl || "")).replace(/\/$/, "");
     await fetch(base + "/functions/v1/send-push", {
       method: "POST",
       headers: {
