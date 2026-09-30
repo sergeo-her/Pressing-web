@@ -2533,13 +2533,24 @@ function urlBase64ToUint8Array(base64String){
 }
 
 async function ensurePushSubscription(){
+  // Automatique : lie l'abonnement push au compte connecté (plus besoin de coller l'UUID)
+  const result = { ok:false, browserOk:false, dbOk:false, error:null };
   try{
-    if(!("Notification" in window) || !("PushManager" in window)) return false;
-    if(!state.profile) return false;
-    if(Notification.permission === "denied") return false;
-    if(Notification.permission === "default"){
-      // Ne force pas immédiatement : le bandeau UI le proposera
-      return false;
+    if(!("Notification" in window) || !("PushManager" in window)){
+      result.error = "Navigateur incompatible.";
+      return result;
+    }
+    if(!state.profile){
+      result.error = "Profil non chargé.";
+      return result;
+    }
+    if(Notification.permission === "denied"){
+      result.error = "Permission refusée.";
+      return result;
+    }
+    if(Notification.permission !== "granted"){
+      result.error = "Permission non accordée.";
+      return result;
     }
     const reg = state._swReg || await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
@@ -2549,24 +2560,68 @@ async function ensurePushSubscription(){
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
       });
     }
+    result.browserOk = true;
     const j = sub.toJSON();
-    const { error } = await sb.from("push_subscriptions").upsert({
-      user_id: state.profile.id,
+    if(!j.keys || !j.keys.p256dh || !j.keys.auth){
+      result.error = "Clés push invalides.";
+      return result;
+    }
+    const uid = state.profile.id;
+    const row = {
+      user_id: uid,
       endpoint: j.endpoint,
       p256dh: j.keys.p256dh,
       auth: j.keys.auth,
-      user_agent: navigator.userAgent.slice(0, 180),
+      user_agent: (navigator.userAgent || "").slice(0, 180),
       updated_at: new Date().toISOString()
-    }, { onConflict: "endpoint" });
-    if(error) console.warn("push_subscriptions:", error.message);
-    else {
+    };
+
+    // 1) Upsert par endpoint (met à jour user_id si l'endpoint existait pour un autre compte)
+    let error = null;
+    ({ error } = await sb.from("push_subscriptions").upsert(row, { onConflict: "endpoint" }));
+
+    // 2) Si échec : update forcé sur cet endpoint
+    if(error){
+      const upd = await sb.from("push_subscriptions").update({
+        user_id: uid,
+        p256dh: row.p256dh,
+        auth: row.auth,
+        user_agent: row.user_agent,
+        updated_at: row.updated_at
+      }).eq("endpoint", row.endpoint);
+      error = upd.error;
+    }
+
+    // 3) Si encore échec : insert simple
+    if(error){
+      const ins = await sb.from("push_subscriptions").insert(row);
+      error = ins.error;
+    }
+
+    // 4) Dernier recours : supprimer l'ancienne ligne endpoint puis réinsérer
+    if(error){
+      await sb.from("push_subscriptions").delete().eq("endpoint", row.endpoint);
+      const ins2 = await sb.from("push_subscriptions").insert(row);
+      error = ins2.error;
+    }
+
+    if(error){
+      result.error = error.message || String(error);
+      result.dbOk = false;
+      // Notifs locales OK quand même
       state.pushEnabled = true;
       try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+      return result;
     }
-    return !error;
+
+    result.dbOk = true;
+    result.ok = true;
+    state.pushEnabled = true;
+    try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+    return result;
   } catch(e){
-    console.warn("Push:", e.message);
-    return false;
+    result.error = e.message || String(e);
+    return result;
   }
 }
 
@@ -2583,20 +2638,24 @@ async function enablePushFromUI(){
       render();
       return;
     }
-    const ok = await ensurePushSubscription();
-    if(ok){
-      // Notification de test locale
+    const res = await ensurePushSubscription();
+    if(res.browserOk){
       try{
         new Notification("Pressing Connecté", {
-          body: "Notifications activées ✓ Vous serez alerté des nouvelles commandes et messages.",
+          body: res.dbOk
+            ? "Notifications activées ✓ Alertes même app fermée (si push serveur configuré)."
+            : "Notifications activées sur cet appareil. Enregistrement serveur incomplet — exécutez PUSH_SQL_MIGRATION.sql dans Supabase.",
           icon: "/icon-192.png"
         });
       } catch(e){}
       state.pushBannerDismissed = true;
       state.pushEnabled = true;
       render();
+      if(!res.dbOk){
+        alert("Permission OK, mais la base n'a pas enregistré l'abonnement.\n\nCause probable : table push_subscriptions absente ou RLS.\n\nDétail : "+(res.error||"inconnu")+"\n\n→ Supabase → SQL Editor → exécuter PUSH_SQL_MIGRATION.sql");
+      }
     } else {
-      alert("Impossible d'enregistrer l'abonnement push. Vérifiez la table push_subscriptions (SQL) et réessayez.");
+      alert("Impossible d'activer les notifications.\n\n"+(res.error || "Erreur inconnue")+"\n\nVérifiez : HTTPS, navigateur à jour, et PUSH_SQL_MIGRATION.sql dans Supabase.");
     }
   } catch(e){
     alert("Erreur : " + (e.message || e));
