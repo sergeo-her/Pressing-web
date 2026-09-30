@@ -2572,8 +2572,7 @@ async function ensurePushSubscription(){
       endpoint: j.endpoint,
       p256dh: j.keys.p256dh,
       auth: j.keys.auth,
-      user_agent: (navigator.userAgent || "").slice(0, 180),
-      updated_at: new Date().toISOString()
+      user_agent: (navigator.userAgent || "").slice(0, 180)
     };
 
     // 1) Upsert par endpoint (met à jour user_id si l'endpoint existait pour un autre compte)
@@ -2586,8 +2585,7 @@ async function ensurePushSubscription(){
         user_id: uid,
         p256dh: row.p256dh,
         auth: row.auth,
-        user_agent: row.user_agent,
-        updated_at: row.updated_at
+        user_agent: row.user_agent
       }).eq("endpoint", row.endpoint);
       error = upd.error;
     }
@@ -2628,12 +2626,12 @@ async function ensurePushSubscription(){
 async function enablePushFromUI(){
   try{
     if(!("Notification" in window)){
-      alert("Les notifications ne sont pas supportées sur cet appareil / navigateur.");
+      alert("Les notifications ne sont pas disponibles sur cet appareil.");
       return;
     }
     const perm = await Notification.requestPermission();
     if(perm !== "granted"){
-      alert("Permission refusée. Vous pourrez l'activer plus tard dans les réglages du navigateur.");
+      alert("Permission refusée. Vous pourrez réessayer plus tard dans les réglages du navigateur.");
       state.pushBannerDismissed = true;
       render();
       return;
@@ -2642,23 +2640,24 @@ async function enablePushFromUI(){
     if(res.browserOk){
       try{
         new Notification("Pressing Connecté", {
-          body: res.dbOk
-            ? "Notifications activées ✓ Alertes même app fermée (si push serveur configuré)."
-            : "Notifications activées sur cet appareil. Enregistrement serveur incomplet — exécutez PUSH_SQL_MIGRATION.sql dans Supabase.",
+          body: "Notifications activées. Vous serez alerté des nouvelles commandes et messages.",
           icon: "/icon-192.png"
         });
       } catch(e){}
       state.pushBannerDismissed = true;
       state.pushEnabled = true;
       render();
+      // Détail technique uniquement dans la console (pas à l'écran utilisateur)
       if(!res.dbOk){
-        alert("Permission OK, mais la base n'a pas enregistré l'abonnement.\n\nCause probable : table push_subscriptions absente ou RLS.\n\nDétail : "+(res.error||"inconnu")+"\n\n→ Supabase → SQL Editor → exécuter PUSH_SQL_MIGRATION.sql");
+        console.warn("[push] enregistrement serveur:", res.error || "échec");
       }
     } else {
-      alert("Impossible d'activer les notifications.\n\n"+(res.error || "Erreur inconnue")+"\n\nVérifiez : HTTPS, navigateur à jour, et PUSH_SQL_MIGRATION.sql dans Supabase.");
+      console.warn("[push] activation:", res.error || "échec");
+      alert("Impossible d'activer les notifications pour le moment. Réessayez plus tard.");
     }
   } catch(e){
-    alert("Erreur : " + (e.message || e));
+    console.warn("[push]", e);
+    alert("Impossible d'activer les notifications pour le moment. Réessayez plus tard.");
   }
 }
 
