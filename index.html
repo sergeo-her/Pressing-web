@@ -385,6 +385,7 @@ function freshState(){
     adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
     adminUsers:[], adminUsersLoading:false,
     adminMsgTitle:"", adminMsgBody:"", adminMsgTarget:"all", adminMsgUserId:"", adminMsgSending:false, adminMsgInfo:null,
+    adminCleanupDays:30, adminCleanupBusy:false, adminCleanupInfo:null,
 
     notifications:[], unreadCount:0, notifOpen:false, pushEnabled:false, pushBannerDismissed:false, _swReg:null,
   };
@@ -441,6 +442,8 @@ async function loadProfileAndRoute(retry){
   } else if(data.role === "admin"){
     await Promise.all([loadAdminPressings(), loadAdminPassRequests(), loadPassSettings()]);
   }
+  // Nettoyage auto 30j (client / pressing / agent)
+  try{ await runRoleAutoCleanup(); }catch(e){ console.warn(e); }
   await loadNotifications();
   if(notifPollTimer) clearInterval(notifPollTimer);
   notifPollTimer = setInterval(loadNotifications, 25000);
@@ -637,8 +640,79 @@ function renderTopBar(){
 }
 
 // =============================== NOTIFICATIONS ===============================
+
+// ---- Nettoyage auto (30 jours) : notifications + cache local ----
+const CLEANUP_DAYS_DEFAULT = 30;
+const CLOSED_ORDER_STATUSES = ["livre","termine"];
+
+function daysAgoISO(days){
+  const d = new Date();
+  d.setDate(d.getDate() - (Number(days) || CLEANUP_DAYS_DEFAULT));
+  return d.toISOString();
+}
+
+/** Nettoyage local (cache navigateur / clés app) — sans toucher au compte */
+async function clearLocalAppCache(){
+  try{
+    const keep = ["pc_push_ok","pc_push_dismiss"];
+    const toRemove = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith("pc_") && !keep.includes(k)) toRemove.push(k);
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+  } catch(e){}
+  try{
+    if("caches" in window){
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch(e){}
+}
+
+/** Auto pour client / pressing / agent : notifs > 30j + commandes clôturées > 30j (selon rôle) */
+async function runRoleAutoCleanup(){
+  if(!state.profile) return;
+  const role = state.profile.role;
+  if(role === "admin") return; // admin : manuel uniquement
+  const before = daysAgoISO(CLEANUP_DAYS_DEFAULT);
+  try{
+    // Notifications personnelles anciennes
+    await sb.from("notifications").delete()
+      .eq("user_id", state.profile.id)
+      .lt("created_at", before);
+  } catch(e){ console.warn("cleanup notifs:", e.message); }
+
+  try{
+    if(role === "client"){
+      await sb.from("orders").delete()
+        .eq("customer_id", state.profile.id)
+        .in("order_status", CLOSED_ORDER_STATUSES)
+        .lt("created_at", before);
+    } else if(role === "pressing" && state.myPressing?.id){
+      await sb.from("orders").delete()
+        .eq("pressing_id", state.myPressing.id)
+        .in("order_status", CLOSED_ORDER_STATUSES)
+        .lt("created_at", before);
+    } else if(role === "agent"){
+      // Les agents ne suppriment pas les commandes globales ; rien de plus
+    }
+  } catch(e){ console.warn("cleanup orders:", e.message); }
+
+  // Cache local au plus une fois par jour
+  try{
+    const key = "pc_cleanup_day";
+    const today = new Date().toISOString().slice(0,10);
+    if(localStorage.getItem(key) !== today){
+      await clearLocalAppCache();
+      localStorage.setItem(key, today);
+    }
+  } catch(e){}
+}
+
 let seenNotifIds = null;
 async function loadNotifications(){
+
   const { data } = await sb.from("notifications").select("*").eq("user_id", state.profile.id).order("created_at",{ascending:false}).limit(30);
   state.notifications = data || [];
   state.unreadCount = state.notifications.filter(n => !n.is_read).length;
@@ -2211,6 +2285,7 @@ function adminGoView(v){
   if(v === "pass") loadAdminPassRequests().then(render);
   else if(v === "users") loadAdminUsers().then(render);
   else if(v === "messages") loadAdminUsers().then(render);
+  else if(v === "cleanup") render();
   else render();
 }
 
@@ -2223,6 +2298,7 @@ function renderAdminApp(){
   if(state.adminView === "pass") return renderAdminPassView();
   if(state.adminView === "users") return renderAdminUsersView();
   if(state.adminView === "messages") return renderAdminMessagesView();
+  if(state.adminView === "cleanup") return renderAdminCleanupView();
 
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:12px;">
@@ -2240,6 +2316,7 @@ function renderAdminApp(){
       <button class="btn ${state.adminView==='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass ${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length ? `(${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length})` : ""}</button>
       <button class="btn ${state.adminView==='users'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
       <button class="btn ${state.adminView==='messages'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
+      <button class="btn ${state.adminView==='cleanup'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('cleanup')">🧹 Nettoyage</button>
     </div>
 
     ${state.adminCreateSuccess ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">✅ ${esc(state.adminCreateSuccess)}</div>` : ""}
@@ -2414,6 +2491,7 @@ function renderAdminUsersView(){
       <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass</button>
       <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
       <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('cleanup')">🧹 Nettoyage</button>
     </div>
     <div class="card" style="margin-bottom:16px;border-color:#f5c2c7;background:#fff5f5;">
       <div style="font-weight:700;font-size:14px;color:#B42323;margin-bottom:6px;">Remise à zéro</div>
@@ -2445,6 +2523,7 @@ function renderAdminMessagesView(){
       <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass</button>
       <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
       <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('cleanup')">🧹 Nettoyage</button>
     </div>
     ${state.adminMsgInfo ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">${esc(state.adminMsgInfo)}</div>` : ""}
     <div class="card">
@@ -2514,6 +2593,89 @@ async function adminSendMessage(){
     alert("Envoi impossible : "+(e.message||e));
   }
   state.adminMsgSending = false;
+  render();
+}
+
+
+
+function adminTabsHtml(active){
+  const btn = (id, label) => `<button class="btn ${active===id?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('${id}')">${label}</button>`;
+  return `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+    ${btn("pressings","Pressings")}
+    ${btn("pass","🎫 Pass")}
+    ${btn("users","👥 Comptes")}
+    ${btn("messages","✉️ Messages")}
+    ${btn("cleanup","🧹 Nettoyage")}
+  </div>`;
+}
+
+function renderAdminCleanupView(){
+  const days = state.adminCleanupDays || 30;
+  return `<div class="screen">
+    <div class="header-row" style="margin-bottom:12px;">
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
+        <div style="font-size:22px;font-family:'Playfair Display',Georgia,serif;font-weight:700;">Nettoyage</div>
+      </div>
+    </div>
+    ${adminTabsHtml("cleanup")}
+    ${state.adminCleanupInfo ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">${esc(state.adminCleanupInfo)}</div>` : ""}
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:700;font-size:15px;margin-bottom:8px;">Purge manuelle</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">Choisissez l’ancienneté minimale. Les éléments plus anciens seront supprimés. Irréversible.</p>
+      <div class="field">
+        <div class="field-label">Plus anciens que (jours)</div>
+        <input type="number" id="adminCleanupDays" min="1" max="365" value="${days}" style="max-width:120px;" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">
+        <button class="btn btn-secondary" style="margin:0;" ${state.adminCleanupBusy?"disabled":""} onclick="adminRunCleanup('notifications')">Supprimer les notifications anciennes</button>
+        <button class="btn btn-secondary" style="margin:0;" ${state.adminCleanupBusy?"disabled":""} onclick="adminRunCleanup('orders_closed')">Supprimer commandes clôturées (livré / terminé)</button>
+        <button class="btn btn-secondary" style="margin:0;" ${state.adminCleanupBusy?"disabled":""} onclick="adminRunCleanup('pass_requests')">Supprimer demandes Pass traitées</button>
+        <button class="btn btn-primary" style="margin:0;" ${state.adminCleanupBusy?"disabled":""} onclick="adminRunCleanup('all')">Tout nettoyer (notifs + commandes clôturées + Pass traités)</button>
+      </div>
+    </div>
+    <div class="card" style="background:#f8faf9;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;">Rappel — automatique</div>
+      <p style="font-size:12px;color:var(--muted);margin:0;">Côté client, pressing et agent, les notifications de plus de <b>30 jours</b> et les commandes clôturées de plus de 30 jours sont purgées automatiquement à la connexion. L’admin utilise uniquement ce panneau manuel.</p>
+    </div>
+  </div>`;
+}
+
+async function adminRunCleanup(kind){
+  const days = Math.max(1, Math.min(365, parseInt(document.getElementById("adminCleanupDays")?.value || state.adminCleanupDays || 30, 10)));
+  state.adminCleanupDays = days;
+  const before = daysAgoISO(days);
+  if(!confirm("Confirmer la purge (« "+kind+" ») des éléments de plus de "+days+" jours ?")) return;
+  state.adminCleanupBusy = true;
+  state.adminCleanupInfo = null;
+  render();
+  const notes = [];
+  try{
+    if(kind === "notifications" || kind === "all"){
+      const { error, count } = await sb.from("notifications").delete({ count:"exact" }).lt("created_at", before);
+      if(error) throw error;
+      notes.push("Notifications : OK");
+    }
+    if(kind === "orders_closed" || kind === "all"){
+      const { error } = await sb.from("orders").delete().in("order_status", CLOSED_ORDER_STATUSES).lt("created_at", before);
+      if(error) throw error;
+      notes.push("Commandes clôturées : OK");
+    }
+    if(kind === "pass_requests" || kind === "all"){
+      try{
+        const { error } = await sb.from("pass_recharge_requests").delete().in("status", ["approved","rejected","done","refused"]).lt("created_at", before);
+        if(error) throw error;
+        notes.push("Demandes Pass traitées : OK");
+      } catch(e){
+        notes.push("Demandes Pass : "+(e.message||"ignoré"));
+      }
+    }
+    state.adminCleanupInfo = "✅ "+notes.join(" · ")+" (>"+days+" j)";
+  } catch(e){
+    state.adminCleanupInfo = null;
+    alert("Nettoyage impossible : "+(e.message||e));
+  }
+  state.adminCleanupBusy = false;
   render();
 }
 
@@ -2987,7 +3149,7 @@ function handlePopState(){
   }
   if(role === "admin"){
     if(state.adminSelectedPressingId){ state.adminSelectedPressingId = null; render(); return; }
-    if(state.adminView === "pass" || state.adminView === "users" || state.adminView === "messages"){ state.adminView = "pressings"; render(); return; }
+    if(state.adminView === "pass" || state.adminView === "users" || state.adminView === "messages" || state.adminView === "cleanup"){ state.adminView = "pressings"; render(); return; }
   }
 }
 window.addEventListener("popstate", handlePopState);
