@@ -383,6 +383,8 @@ function freshState(){
     adminPressings:[], adminSelectedPressingId:null, adminOrders:[], adminPressingClients:[], paymentFormFor:null,
     adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
     adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
+    adminUsers:[], adminUsersLoading:false,
+    adminMsgTitle:"", adminMsgBody:"", adminMsgTarget:"all", adminMsgUserId:"", adminMsgSending:false, adminMsgInfo:null,
 
     notifications:[], unreadCount:0, notifOpen:false, pushEnabled:false, pushBannerDismissed:false, _swReg:null,
   };
@@ -561,7 +563,7 @@ function renderResetPassword(){
 function submitNewPassword(){ doUpdatePassword(document.getElementById("newPassword").value); }
 
 function renderSignup(){
-  const roleOptions = [["client","Client (gratuit)"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"],["agent","Agent — rejoint un pressing existant"]];
+  const roleOptions = [["client","Client"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"],["agent","Agent — rejoint un pressing existant"]];
   return `<div class="screen" style="padding-top:30px;">
     <h1 style="font-size:20px;margin-bottom:4px;">Créer un compte</h1>
     <div class="field"><div class="field-label">Nom complet</div><input type="text" id="suFullName" /></div>
@@ -2205,7 +2207,10 @@ async function adminManualCredit(){
 function adminGoView(v){
   state.adminView = v;
   state.adminSelectedPressingId = null;
+  state.adminMsgInfo = null;
   if(v === "pass") loadAdminPassRequests().then(render);
+  else if(v === "users") loadAdminUsers().then(render);
+  else if(v === "messages") loadAdminUsers().then(render);
   else render();
 }
 
@@ -2216,6 +2221,8 @@ function renderAdminApp(){
     return renderAdminPressingDetail(p);
   }
   if(state.adminView === "pass") return renderAdminPassView();
+  if(state.adminView === "users") return renderAdminUsersView();
+  if(state.adminView === "messages") return renderAdminMessagesView();
 
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:12px;">
@@ -2228,9 +2235,11 @@ function renderAdminApp(){
         <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="openAdminCreate()">+ Créer</button>
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;">
-      <button class="btn ${state.adminView!=='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
-      <button class="btn ${state.adminView==='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass clients ${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length ? `(${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length})` : ""}</button>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <button class="btn ${state.adminView==='pressings'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
+      <button class="btn ${state.adminView==='pass'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass ${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length ? `(${(state.adminPassRequests||[]).filter(r=>r.status==='pending').length})` : ""}</button>
+      <button class="btn ${state.adminView==='users'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
+      <button class="btn ${state.adminView==='messages'?'btn-primary':'btn-secondary'}" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
     </div>
 
     ${state.adminCreateSuccess ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">✅ ${esc(state.adminCreateSuccess)}</div>` : ""}
@@ -2293,6 +2302,221 @@ function renderAdminApp(){
       }).join("")}
   </div>`;
 }
+
+
+// ---- Admin : comptes & messages ----
+async function loadAdminUsers(){
+  state.adminUsersLoading = true; render();
+  try{
+    const { data, error } = await sb.from("profiles").select("id,full_name,phone,role,created_at").order("created_at",{ascending:false}).limit(300);
+    if(error) throw error;
+    state.adminUsers = data || [];
+  } catch(e){
+    console.warn("loadAdminUsers", e.message);
+    state.adminUsers = state.adminUsers || [];
+    alert("Impossible de charger les comptes. Vérifie les droits admin (RLS).");
+  }
+  state.adminUsersLoading = false;
+}
+
+async function adminDeleteUser(userId){
+  if(!userId) return;
+  const u = (state.adminUsers || []).find(x => x.id === userId);
+  if(u && u.role === "admin"){ alert("Impossible de supprimer un compte admin."); return; }
+  if(!confirm("Supprimer ce compte et ses données liées ?\\n"+(u ? (u.full_name||"")+" · "+(u.role||"") : userId))) return;
+  try{
+    // Nettoyage données liées (meilleur effort)
+    await sb.from("notifications").delete().eq("user_id", userId);
+    await sb.from("push_subscriptions").delete().eq("user_id", userId);
+    try{ await sb.from("pass_recharge_requests").delete().eq("user_id", userId); }catch(e){}
+    try{ await sb.from("pressing_customers").delete().eq("customer_id", userId); }catch(e){}
+    try{ await sb.from("orders").delete().eq("customer_id", userId); }catch(e){}
+    const { error } = await sb.from("profiles").delete().eq("id", userId);
+    if(error) throw error;
+    // Auth user : via Edge Function si déployée
+    try{
+      const { data: { session } } = await sb.auth.getSession();
+      if(session){
+        await fetch((typeof SUPABASE_URL!=="undefined"?SUPABASE_URL:"")+"/functions/v1/admin-delete-user", {
+          method:"POST",
+          headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+session.access_token },
+          body: JSON.stringify({ user_id: userId })
+        });
+      }
+    } catch(e){ console.warn("auth delete:", e.message); }
+    await loadAdminUsers();
+    render();
+    alert("Compte supprimé.");
+  } catch(e){
+    alert("Suppression impossible : "+(e.message||e));
+  }
+}
+
+async function adminWipeNonAdmins(){
+  if(!confirm("ATTENTION : supprimer TOUS les comptes sauf les admins ?\\nCette action est irréversible.")) return;
+  if(!confirm("Confirme une seconde fois la remise à zéro des comptes test.")) return;
+  const list = (state.adminUsers || []).filter(u => u.role !== "admin");
+  let ok = 0, fail = 0;
+  for(const u of list){
+    try{
+      await sb.from("notifications").delete().eq("user_id", u.id);
+      await sb.from("push_subscriptions").delete().eq("user_id", u.id);
+      try{ await sb.from("pass_recharge_requests").delete().eq("user_id", u.id); }catch(e){}
+      try{ await sb.from("pressing_customers").delete().eq("customer_id", u.id); }catch(e){}
+      try{ await sb.from("orders").delete().eq("customer_id", u.id); }catch(e){}
+      const { error } = await sb.from("profiles").delete().eq("id", u.id);
+      if(error) throw error;
+      try{
+        const { data: { session } } = await sb.auth.getSession();
+        if(session){
+          await fetch((typeof SUPABASE_URL!=="undefined"?SUPABASE_URL:"")+"/functions/v1/admin-delete-user", {
+            method:"POST",
+            headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+session.access_token },
+            body: JSON.stringify({ user_id: u.id })
+          });
+        }
+      } catch(e){}
+      ok++;
+    } catch(e){ fail++; console.warn(e); }
+  }
+  await loadAdminUsers();
+  render();
+  alert("Terminé : "+ok+" supprimé(s)"+(fail ? ", "+fail+" échec(s)" : "")+".");
+}
+
+function renderAdminUsersView(){
+  const users = state.adminUsers || [];
+  const byRole = { client:[], pressing:[], agent:[], admin:[], other:[] };
+  users.forEach(u => {
+    if(byRole[u.role]) byRole[u.role].push(u);
+    else byRole.other.push(u);
+  });
+  function row(u){
+    return `<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div style="min-width:0;">
+        <div style="font-weight:700;font-size:14px;">${esc(u.full_name||"—")}</div>
+        <div style="font-size:12px;color:var(--muted);">${esc(u.role||"")} · ${esc(u.phone||"pas de tél.")} · <span style="font-size:10px;opacity:.7;">${(u.id||"").slice(0,8)}</span></div>
+      </div>
+      ${u.role === "admin" ? `<span style="font-size:11px;color:var(--muted);">Admin</span>` :
+        `<button class="btn btn-secondary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;color:#B42323;border-color:#fdc;" onclick="adminDeleteUser('${u.id}')">Supprimer</button>`}
+    </div>`;
+  }
+  return `<div class="screen">
+    <div class="header-row" style="margin-bottom:12px;">
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
+        <div style="font-size:22px;font-family:'Playfair Display',Georgia,serif;font-weight:700;">Comptes</div>
+      </div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="loadAdminUsers().then(render)">🔄</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass</button>
+      <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
+    </div>
+    <div class="card" style="margin-bottom:16px;border-color:#f5c2c7;background:#fff5f5;">
+      <div style="font-weight:700;font-size:14px;color:#B42323;margin-bottom:6px;">Remise à zéro</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Supprime tous les comptes sauf les admins (données liées incluses). Irréversible.</p>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;color:#B42323;border-color:#f5c2c7;" onclick="adminWipeNonAdmins()">Tout effacer sauf admins</button>
+    </div>
+    ${state.adminUsersLoading ? `<p style="color:var(--muted);">Chargement…</p>` : `
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">${users.length} compte(s)</p>
+      ${["admin","pressing","client","agent","other"].map(role => {
+        const list = byRole[role]||[];
+        if(!list.length) return "";
+        return `<div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:14px 0 8px;">${role} (${list.length})</div>` + list.map(row).join("");
+      }).join("")}
+    `}
+  </div>`;
+}
+
+function renderAdminMessagesView(){
+  const users = (state.adminUsers || []).filter(u => u.role !== "admin");
+  return `<div class="screen">
+    <div class="header-row" style="margin-bottom:12px;">
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;letter-spacing:.04em;">Administration</div>
+        <div style="font-size:22px;font-family:'Playfair Display',Georgia,serif;font-weight:700;">Messages</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass</button>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('users')">👥 Comptes</button>
+      <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('messages')">✉️ Messages</button>
+    </div>
+    ${state.adminMsgInfo ? `<div class="banner-warning" style="border-color:var(--brand);background:var(--brand-soft);color:var(--brand-dark);margin-bottom:14px;">${esc(state.adminMsgInfo)}</div>` : ""}
+    <div class="card">
+      <div class="field">
+        <div class="field-label">Destinataires</div>
+        <select id="adminMsgTarget" onchange="state.adminMsgTarget=this.value;render();">
+          <option value="all" ${state.adminMsgTarget==="all"?"selected":""}>Tous les utilisateurs</option>
+          <option value="clients" ${state.adminMsgTarget==="clients"?"selected":""}>Tous les clients</option>
+          <option value="pressings" ${state.adminMsgTarget==="pressings"?"selected":""}>Tous les pressings</option>
+          <option value="agents" ${state.adminMsgTarget==="agents"?"selected":""}>Tous les agents</option>
+          <option value="one" ${state.adminMsgTarget==="one"?"selected":""}>Un utilisateur précis</option>
+        </select>
+      </div>
+      ${state.adminMsgTarget === "one" ? `
+      <div class="field">
+        <div class="field-label">Utilisateur</div>
+        <select id="adminMsgUserId">
+          ${users.map(u => `<option value="${u.id}">${esc(u.full_name||"Sans nom")} · ${esc(u.role)} · ${esc(u.phone||"")}</option>`).join("")}
+        </select>
+      </div>` : ""}
+      <div class="field">
+        <div class="field-label">Titre</div>
+        <input type="text" id="adminMsgTitle" value="${esc(state.adminMsgTitle||"")}" placeholder="Ex: Maintenance ce soir" />
+      </div>
+      <div class="field">
+        <div class="field-label">Message</div>
+        <textarea id="adminMsgBody" rows="4" placeholder="Votre message…">${esc(state.adminMsgBody||"")}</textarea>
+      </div>
+      <button class="btn btn-primary" ${state.adminMsgSending?"disabled":""} onclick="adminSendMessage()">${state.adminMsgSending?"Envoi…":"Envoyer"}</button>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:12px;">Le message apparaît dans la cloche notifications. Une push est tentée si l’utilisateur a activé les notifications.</p>
+  </div>`;
+}
+
+async function adminSendMessage(){
+  const title = (document.getElementById("adminMsgTitle")?.value || "").trim();
+  const body = (document.getElementById("adminMsgBody")?.value || "").trim();
+  const target = state.adminMsgTarget || "all";
+  if(!title || !body){ alert("Titre et message requis."); return; }
+  let users = state.adminUsers || [];
+  if(!users.length){ await loadAdminUsers(); users = state.adminUsers || []; }
+  let recipients = [];
+  if(target === "all") recipients = users.filter(u => u.role !== "admin");
+  else if(target === "clients") recipients = users.filter(u => u.role === "client");
+  else if(target === "pressings") recipients = users.filter(u => u.role === "pressing");
+  else if(target === "agents") recipients = users.filter(u => u.role === "agent");
+  else if(target === "one"){
+    const id = document.getElementById("adminMsgUserId")?.value;
+    recipients = users.filter(u => u.id === id);
+  }
+  if(!recipients.length){ alert("Aucun destinataire."); return; }
+  if(!confirm("Envoyer à "+recipients.length+" utilisateur(s) ?")) return;
+  state.adminMsgSending = true; render();
+  try{
+    const rows = recipients.map(u => ({ user_id: u.id, title, message: body, is_read: false }));
+    // insert par lots de 50
+    for(let i=0;i<rows.length;i+=50){
+      const { error } = await sb.from("notifications").insert(rows.slice(i,i+50));
+      if(error) throw error;
+    }
+    await sendNativePush(recipients.map(u => u.id), title, body, "/");
+    state.adminMsgTitle = "";
+    state.adminMsgBody = "";
+    state.adminMsgInfo = "✅ Message envoyé à "+recipients.length+" utilisateur(s).";
+  } catch(e){
+    state.adminMsgInfo = null;
+    alert("Envoi impossible : "+(e.message||e));
+  }
+  state.adminMsgSending = false;
+  render();
+}
+
 
 function renderAdminPassView(){
   const pending = (state.adminPassRequests||[]).filter(r => r.status === "pending");
@@ -2763,7 +2987,7 @@ function handlePopState(){
   }
   if(role === "admin"){
     if(state.adminSelectedPressingId){ state.adminSelectedPressingId = null; render(); return; }
-    if(state.adminView === "pass"){ state.adminView = "pressings"; render(); return; }
+    if(state.adminView === "pass" || state.adminView === "users" || state.adminView === "messages"){ state.adminView = "pressings"; render(); return; }
   }
 }
 window.addEventListener("popstate", handlePopState);
