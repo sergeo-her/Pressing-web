@@ -183,10 +183,30 @@ const STATUS_LABELS = {
   agent_en_route_livraison:"Agent en route (livraison)", livre:"Livré",
   termine:"Terminée", annule:"Annulée"
 };
-const PLAN_LABELS = { mensuel:"Mensuel — 2 500 FCFA", trimestriel:"3 mois — 7 500 FCFA", semestriel:"6 mois — 15 000 FCFA", annuel:"1 an — 30 000 FCFA (+2 mois offerts)" };
-const PLAN_DURATIONS = { mensuel:30, trimestriel:90, semestriel:182, annuel:425 };
-const PLAN_AMOUNTS = { mensuel:2500, trimestriel:7500, semestriel:15000, annuel:30000 };
-
+// Abonnements pressing — modifiables admin (platform_settings key: pressing_plans)
+const PLAN_DEFAULTS = {
+  mensuel:     { id:"mensuel",     label:"Mensuel",     price:2500,  days:30,  note:"" },
+  trimestriel: { id:"trimestriel", label:"3 mois",      price:7500,  days:90,  note:"" },
+  semestriel:  { id:"semestriel",  label:"6 mois",      price:15000, days:182, note:"" },
+  annuel:      { id:"annuel",      label:"1 an",        price:30000, days:365, note:"+2 mois offerts" },
+};
+function getPressingPlans(){
+  return state.pressingPlans || PLAN_DEFAULTS;
+}
+function planLabel(id){
+  const p = getPressingPlans()[id];
+  if(!p) return id;
+  const extra = p.note ? " ("+p.note+")" : "";
+  return p.label+" — "+fcfa(p.price)+extra;
+}
+function planDays(id){
+  const p = getPressingPlans()[id];
+  return p ? Number(p.days)||30 : 30;
+}
+function planAmount(id){
+  const p = getPressingPlans()[id];
+  return p ? Number(p.price)||0 : 0;
+}
 // ---- Pass Rechargement (forfait de réservations client) ----
 const PLATFORM_MOMO = {
   orange: { phone: "691495135", label: "Orange Money", name: "Serge Hervé Moudio Koung" },
@@ -289,44 +309,99 @@ async function deductPassCredit(){
 }
 
 async function loadPassSettings(){
-  // Charge la config complète des forfaits depuis platform_settings
+  // Forfaits client (pass) + abonnements pressing
   try{
     const { data, error } = await sb.from("platform_settings").select("value").eq("key","pass_prices").maybeSingle();
     if(error || !data?.value){
       state.passPacks = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
-      return;
-    }
-    const saved = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
-    // Nouveau format : packs complets { pack_5: {...}, pack_10: {...}, unlimited: {...} }
-    if(saved.packs && typeof saved.packs === "object"){
-      const packs = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
-      for(const id of Object.keys(packs)){
-        if(saved.packs[id]){
-          if(saved.packs[id].price != null) packs[id].price = Number(saved.packs[id].price);
-          if(saved.packs[id].credits != null) packs[id].credits = Number(saved.packs[id].credits);
-          if(saved.packs[id].days != null) packs[id].days = Number(saved.packs[id].days);
-          if(saved.packs[id].label) packs[id].label = saved.packs[id].label;
-          if(saved.packs[id].desc) packs[id].desc = saved.packs[id].desc;
+    } else {
+      const saved = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
+      if(saved.packs && typeof saved.packs === "object"){
+        const packs = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
+        for(const id of Object.keys(packs)){
+          if(saved.packs[id]){
+            if(saved.packs[id].price != null) packs[id].price = Number(saved.packs[id].price);
+            if(saved.packs[id].credits != null) packs[id].credits = Number(saved.packs[id].credits);
+            if(saved.packs[id].days != null) packs[id].days = Number(saved.packs[id].days);
+            if(saved.packs[id].label) packs[id].label = saved.packs[id].label;
+            if(saved.packs[id].desc) packs[id].desc = saved.packs[id].desc;
+          }
         }
+        if(saved.packs.unlimited_30 && !saved.packs.unlimited){
+          const u = saved.packs.unlimited_30;
+          packs.unlimited.price = Number(u.price ?? packs.unlimited.price);
+          packs.unlimited.days = Number(u.days ?? packs.unlimited.days);
+        }
+        state.passPacks = packs;
+      } else {
+        const packs = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
+        if(saved.pack_10_price != null) packs.pack_10.price = Number(saved.pack_10_price);
+        if(saved.unlimited_30_price != null) packs.unlimited.price = Number(saved.unlimited_30_price);
+        if(saved.pack_5_price != null) packs.pack_5.price = Number(saved.pack_5_price);
+        state.passPacks = packs;
       }
-      // Migration ancienne clé unlimited_30 → unlimited
-      if(saved.packs.unlimited_30 && !saved.packs.unlimited){
-        const u = saved.packs.unlimited_30;
-        packs.unlimited.price = Number(u.price ?? packs.unlimited.price);
-        packs.unlimited.days = Number(u.days ?? packs.unlimited.days);
-      }
-      state.passPacks = packs;
-      return;
     }
-    // Ancien format plat (compatibilité)
-    const packs = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
-    if(saved.pack_10_price != null) packs.pack_10.price = Number(saved.pack_10_price);
-    if(saved.unlimited_30_price != null) packs.unlimited.price = Number(saved.unlimited_30_price);
-    if(saved.pack_5_price != null) packs.pack_5.price = Number(saved.pack_5_price);
-    state.passPacks = packs;
   } catch(e){
     state.passPacks = JSON.parse(JSON.stringify(PASS_PACKS_DEFAULT));
   }
+  try{
+    const { data, error } = await sb.from("platform_settings").select("value").eq("key","pressing_plans").maybeSingle();
+    const plans = JSON.parse(JSON.stringify(PLAN_DEFAULTS));
+    if(!error && data?.value){
+      const saved = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
+      const src = saved.plans || saved;
+      for(const id of Object.keys(plans)){
+        if(src[id]){
+          if(src[id].price != null) plans[id].price = Number(src[id].price);
+          if(src[id].days != null) plans[id].days = Number(src[id].days);
+          if(src[id].label) plans[id].label = src[id].label;
+          if(src[id].note != null) plans[id].note = src[id].note;
+        }
+      }
+    }
+    state.pressingPlans = plans;
+  } catch(e){
+    state.pressingPlans = JSON.parse(JSON.stringify(PLAN_DEFAULTS));
+  }
+}
+
+async function savePressingPlansConfig(plansConfig){
+  const plans = plansConfig || getPressingPlans();
+  state.pressingPlans = plans;
+  const value = { plans };
+  try{
+    const { data: existing } = await sb.from("platform_settings").select("id").eq("key","pressing_plans").maybeSingle();
+    let error = null;
+    if(existing){
+      ({ error } = await sb.from("platform_settings").update({ value, updated_at: new Date().toISOString() }).eq("key","pressing_plans"));
+    } else {
+      ({ error } = await sb.from("platform_settings").insert({ key:"pressing_plans", value }));
+    }
+    if(error) throw error;
+    return true;
+  } catch(e){
+    console.warn("savePressingPlans:", e.message);
+    alert("Enregistré localement. Enregistrement serveur : "+(e.message||e));
+    return false;
+  }
+}
+
+async function submitAdminPressingPlans(){
+  const ids = ["mensuel","trimestriel","semestriel","annuel"];
+  const plans = JSON.parse(JSON.stringify(PLAN_DEFAULTS));
+  for(const id of ids){
+    const price = parseInt(document.getElementById("plan_price_"+id)?.value, 10);
+    const days = parseInt(document.getElementById("plan_days_"+id)?.value, 10);
+    const label = (document.getElementById("plan_label_"+id)?.value || "").trim();
+    const note = (document.getElementById("plan_note_"+id)?.value || "").trim();
+    if(!isNaN(price) && price >= 0) plans[id].price = price;
+    if(!isNaN(days) && days > 0) plans[id].days = days;
+    if(label) plans[id].label = label;
+    plans[id].note = note;
+  }
+  const ok = await savePressingPlansConfig(plans);
+  if(ok) alert("Tarifs abonnements pressing enregistrés.");
+  render();
 }
 
 async function savePassPacksConfig(packsConfig){
@@ -382,7 +457,7 @@ function freshState(){
 
     adminPressings:[], adminSelectedPressingId:null, adminOrders:[], adminPressingClients:[], paymentFormFor:null,
     adminCreateOpen:false, adminCreateError:null, adminCreateSuccess:null,
-    adminView:"pressings", adminPassRequests:[], adminPassLoading:false,
+    adminView:"pressings", adminPassRequests:[], adminPassLoading:false, pressingPlans:null,
     adminUsers:[], adminUsersLoading:false,
     adminMsgTitle:"", adminMsgBody:"", adminMsgTarget:"all", adminMsgUserId:"", adminMsgSending:false, adminMsgInfo:null,
     adminCleanupDays:30, adminCleanupBusy:false, adminCleanupInfo:null,
@@ -1961,19 +2036,19 @@ async function recordPayment(pressingId){
   const plan = document.getElementById("planSelect-" + pressingId).value;
   const sub = getSub(state.adminPressings.find(p=>p.id===pressingId));
   const base = (sub?.current_period_end && new Date(sub.current_period_end) > new Date()) ? new Date(sub.current_period_end) : new Date();
-  const end = new Date(base); end.setDate(end.getDate() + PLAN_DURATIONS[plan]);
+  const end = new Date(base); end.setDate(end.getDate() + planDays(plan));
   // Upsert-like: try update first, if no row create
   const { data: existing } = await sb.from("subscriptions").select("id").eq("pressing_id", pressingId).maybeSingle();
   if(existing){
     await sb.from("subscriptions").update({
       plan, current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
-      manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO(), trial_end: null
+      manual_status:"ok", last_payment_amount: planAmount(plan), last_payment_at: todayISO(), trial_end: null
     }).eq("pressing_id", pressingId);
   } else {
     await sb.from("subscriptions").insert({
       pressing_id: pressingId, plan,
       current_period_start: todayISO(), current_period_end: end.toISOString().slice(0,10),
-      manual_status:"ok", last_payment_amount: PLAN_AMOUNTS[plan], last_payment_at: todayISO()
+      manual_status:"ok", last_payment_amount: planAmount(plan), last_payment_at: todayISO()
     });
   }
   state.paymentFormFor = null;
@@ -2364,7 +2439,7 @@ function renderAdminApp(){
           </div>
           <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
             ${state.paymentFormFor === p.id ? `
-              <select id="planSelect-${p.id}" style="flex:1;min-width:140px;">${Object.entries(PLAN_LABELS).map(([k,l]) => `<option value="${k}">${l}</option>`).join("")}</select>
+              <select id="planSelect-${p.id}" style="flex:1;min-width:140px;">${Object.keys(getPressingPlans()).map(k => [k, planLabel(k)]).map(([k,l]) => `<option value="${k}">${l}</option>`).join("")}</select>
               <button class="btn btn-primary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;" onclick="recordPayment('${p.id}')">Confirmer</button>
               <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="cancelPaymentForm()">Annuler</button>
             ` : `
@@ -2757,6 +2832,25 @@ function renderAdminPassView(){
         </div>
       </div>
       <button class="btn btn-primary" style="margin-top:10px;" onclick="adminManualCredit()">Créditer le client</button>
+    </div>
+
+
+    <div class="card" style="margin-bottom:18px;border:2px solid var(--brand);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">Abonnements pressing (tarifs)</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Modifie les prix et durées proposés aux réseaux pressing — comme pour les Pass clients.</p>
+      ${Object.keys(getPressingPlans()).map(id => {
+        const pl = getPressingPlans()[id];
+        return `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--ink2);">${esc(pl.label)} <span style="font-weight:500;color:var(--muted);">(${id})</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div class="field" style="margin:0;"><div class="field-label">Libellé</div><input type="text" id="plan_label_${id}" value="${esc(pl.label)}" /></div>
+            <div class="field" style="margin:0;"><div class="field-label">Note (optionnel)</div><input type="text" id="plan_note_${id}" value="${esc(pl.note||'')}" placeholder="Ex: +2 mois offerts" /></div>
+            <div class="field" style="margin:0;"><div class="field-label">Prix (FCFA)</div><input type="number" id="plan_price_${id}" value="${pl.price}" min="0" step="100" /></div>
+            <div class="field" style="margin:0;"><div class="field-label">Durée (jours)</div><input type="number" id="plan_days_${id}" value="${pl.days}" min="1" step="1" /></div>
+          </div>
+        </div>`;
+      }).join("")}
+      <button class="btn btn-primary" style="margin:0;" onclick="submitAdminPressingPlans()">Enregistrer les tarifs pressing</button>
     </div>
 
     <div style="font-size:15px;font-weight:700;margin:8px 0 10px;color:var(--brand-dark);">Demandes en attente</div>
