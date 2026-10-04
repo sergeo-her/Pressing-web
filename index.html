@@ -223,6 +223,63 @@ function getPassPacks(){
   return state.passPacks || PASS_PACKS_DEFAULT;
 }
 
+// ---- Accès étanche pressing (marque blanche / multi-tenant) ----
+function generateInviteCode(){
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for(let i=0;i<6;i++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+function getJoinLink(code){
+  const base = (window.location.origin + window.location.pathname).replace(/\/$/,"") || window.location.href.split("?")[0];
+  return base + "?join=" + encodeURIComponent(code);
+}
+function parseJoinFromUrl(){
+  try{
+    const u = new URL(window.location.href);
+    const code = u.searchParams.get("join") || u.searchParams.get("code") || u.searchParams.get("p");
+    if(code){
+      state.joinCode = String(code).trim().toUpperCase();
+      try{ localStorage.setItem("pc_join_code", state.joinCode); }catch(e){}
+    } else {
+      try{
+        const saved = localStorage.getItem("pc_join_code");
+        if(saved) state.joinCode = saved;
+      }catch(e){}
+    }
+  } catch(e){}
+}
+async function resolvePressingByCode(code){
+  if(!code) return null;
+  const c = String(code).trim().toUpperCase();
+  // RPC sécurisé si disponible
+  try{
+    const { data, error } = await sb.rpc("resolve_pressing_code", { p_code: c });
+    if(!error && data){
+      const row = Array.isArray(data) ? data[0] : data;
+      if(row && row.id) return row;
+    }
+  } catch(e){}
+  // Repli lecture directe (nécessite policy code public limitée)
+  try{
+    const { data } = await sb.from("pressings").select("id,name,invite_code,address,phone").eq("invite_code", c).eq("status","active").maybeSingle();
+    if(data) return data;
+  } catch(e){}
+  return null;
+}
+async function linkClientToPressing(pressingId){
+  if(!state.profile || !pressingId) return false;
+  try{
+    await sb.from("profiles").update({ home_pressing_id: pressingId }).eq("id", state.profile.id);
+    state.profile.home_pressing_id = pressingId;
+    state.clientHomePressingId = pressingId;
+  } catch(e){ console.warn("home_pressing_id:", e.message); }
+  await enrollInNetwork(pressingId);
+  try{ localStorage.removeItem("pc_join_code"); }catch(e){}
+  return true;
+}
+
+
 function fcfa(n){ return (n||0).toLocaleString("fr-FR") + " FCFA"; }
 function nextStatus(cur){ const i = STATUS_FLOW.indexOf(cur); return (i===-1||i===STATUS_FLOW.length-1) ? cur : STATUS_FLOW[i+1]; }
 function esc(s){ return String(s==null?"":s).replace(/"/g,"&quot;"); }
@@ -441,7 +498,7 @@ function freshState(){
     view:"loading", authScreen:"login", authError:null, authInfo:null, authLoading:false, signupPressings:[],
     session:null, profile:null,
 
-    pressingsList:[], selectedPressingId:null, clientConfig:null, clientScreen:"choosePressing",
+    pressingsList:[], selectedPressingId:null, clientConfig:null, clientScreen:"choosePressing", joinCode:null, joinPressing:null, clientHomePressingId:null,
     orders:[], activeOrderId:null, booking:null, bookingError:null, bookingSubmitting:false,
     clientCampaigns:[], confirmedCampaigns:{}, featuredReviews:[], reviewFormOpen:false, draftReview:null,
     passSelectedPack:null, passRequestNote:"", passRequestSubmitting:false, passRequestSuccess:null, passRequestError:null,
@@ -472,6 +529,7 @@ function setState(patch){ Object.assign(state, patch); render(); }
 
 async function init(){
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  parseJoinFromUrl();
 
   const { data:{ session } } = await sb.auth.getSession();
   state.session = session;
@@ -501,8 +559,33 @@ async function loadProfileAndRoute(retry){
 
   if(data.role === "client"){
     state.profile = await ensureClientPass(data);
-    state.clientScreen = "choosePressing";
-    await Promise.all([loadPressingsListForClient(), loadClientOrders(), loadPassSettings()]);
+    await loadPassSettings();
+    await loadClientOrders();
+    // Rattachement étanche : home_pressing_id, code URL, ou pressing_customers
+    let homeId = state.profile.home_pressing_id || null;
+    if(!homeId && state.joinCode){
+      const jp = await resolvePressingByCode(state.joinCode);
+      if(jp){ await linkClientToPressing(jp.id); homeId = jp.id; state.joinPressing = jp; }
+    }
+    if(!homeId){
+      try{
+        const { data: pc } = await sb.from("pressing_customers").select("pressing_id").eq("customer_id", state.profile.id).limit(1).maybeSingle();
+        if(pc?.pressing_id){
+          homeId = pc.pressing_id;
+          try{ await sb.from("profiles").update({ home_pressing_id: homeId }).eq("id", state.profile.id); }catch(e){}
+          state.profile.home_pressing_id = homeId;
+        }
+      } catch(e){}
+    }
+    state.clientHomePressingId = homeId;
+    if(homeId){
+      state.selectedPressingId = homeId;
+      state.clientScreen = "home";
+      await loadClientPressingOnly(homeId);
+    } else {
+      state.clientScreen = "joinPressing";
+      state.pressingsList = [];
+    }
   } else if(data.role === "pressing"){
     await loadMyPressing();
     if(!state.myPressing){
@@ -538,7 +621,7 @@ async function logout(){
 
 // =============================== AUTH ===============================
 function goAuthScreen(s){ setState({ authScreen:s, authError:null, authInfo:null }); if(s==="signup") loadSignupPressings(); }
-async function loadSignupPressings(){ const { data } = await sb.from("pressings").select("id,name").eq("status","active"); state.signupPressings = data || []; render(); }
+async function loadSignupPressings(){ state.signupPressings = []; render(); }
 
 async function doLogin(email, password){
   setState({ authLoading:true, authError:null });
@@ -562,7 +645,6 @@ async function doSignup(payload){
   });
   state.authLoading = false;
   if(error){ setState({ authError: error.message }); return; }
-  // Compléter le profil (téléphone + adresses) dès que la session est active
   if(data?.user){
     const patch = {
       full_name: payload.fullName || null,
@@ -570,9 +652,20 @@ async function doSignup(payload){
       home_address: payload.homeAddress || null,
       work_address: payload.workAddress || null
     };
+    if(payload.role === "client" && payload.pressingId){
+      patch.home_pressing_id = payload.pressingId;
+    }
     try{
       await sb.from("profiles").update(patch).eq("id", data.user.id);
     } catch(e){ console.warn("profile patch signup:", e); }
+    if(payload.role === "client" && payload.pressingId && data.session){
+      try{
+        await sb.from("pressing_customers").upsert(
+          { pressing_id: payload.pressingId, customer_id: data.user.id, joined_at: new Date().toISOString() },
+          { onConflict: "pressing_id,customer_id" }
+        );
+      } catch(e){ console.warn("enroll signup:", e.message); }
+    }
   }
   if(data?.user && !data.session){ setState({ authInfo: "Compte créé. Vérifie ta boîte mail pour confirmer ton adresse avant de te connecter." }); }
   else if(data?.session){ state.session = data.session; await loadProfileAndRoute(); }
@@ -642,6 +735,7 @@ function submitNewPassword(){ doUpdatePassword(document.getElementById("newPassw
 
 function renderSignup(){
   const roleOptions = [["client","Client"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"],["agent","Agent — rejoint un pressing existant"]];
+  const joinPrefill = state.joinCode || "";
   return `<div class="screen" style="padding-top:30px;">
     <h1 style="font-size:20px;margin-bottom:4px;">Créer un compte</h1>
     <div class="field"><div class="field-label">Nom complet</div><input type="text" id="suFullName" /></div>
@@ -654,26 +748,56 @@ function renderSignup(){
     <div id="clientAddressFields">
       <div class="field"><div class="field-label">Adresse domicile</div><input type="text" id="suHomeAddress" placeholder="Quartier, rue, ville…" /></div>
       <div class="field"><div class="field-label">Adresse travail / bureau (optionnel)</div><input type="text" id="suWorkAddress" placeholder="Lieu de travail si collecte au bureau" /></div>
+      <div class="field" id="clientJoinCodeField">
+        <div class="field-label">Code de votre pressing *</div>
+        <input type="text" id="suJoinCode" value="${esc(joinPrefill)}" placeholder="Code donné par votre pressing" style="text-transform:uppercase;letter-spacing:.06em;font-weight:700;" />
+        <p style="font-size:11px;color:var(--muted);margin:6px 0 0;">Sans ce code, vous ne pourrez pas rejoindre un pressing. Demandez-le au comptoir ou via le lien/QR de votre pressing.</p>
+      </div>
     </div>
     <div class="field" id="pressingPickerField" style="display:none;">
-      <div class="field-label">Pressing à rejoindre</div>
-      <select id="suPressingId">${state.signupPressings.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+      <div class="field-label">Code du pressing à rejoindre (agent)</div>
+      <input type="text" id="suAgentJoinCode" placeholder="Code du pressing employeur" style="text-transform:uppercase;" />
+      <select id="suPressingId" style="display:none;">${state.signupPressings.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
     </div>
     ${state.authError ? `<div class="error-msg">${esc(state.authError)}</div>` : ""}
     ${state.authInfo ? `<div class="info-msg">${esc(state.authInfo)}</div>` : ""}
     <button class="btn btn-primary" onclick="submitSignup()">${state.authLoading?'Création...':'Créer mon compte'}</button>
     <button class="btn btn-secondary" onclick="goAuthScreen('login')" style="margin-top:8px;">J'ai déjà un compte</button>
+    <div style="text-align:center;margin-top:20px;font-size:11px;color:var(--mutedLight);">Propulsé par Pressing Connecté</div>
   </div>`;
 }
 function onSignupRoleChange(){
   const role = document.getElementById("suRole").value;
   const pf = document.getElementById("pressingPickerField");
   const af = document.getElementById("clientAddressFields");
+  const cf = document.getElementById("clientJoinCodeField");
   if(pf) pf.style.display = role === "agent" ? "block" : "none";
   if(af) af.style.display = (role === "client" || role === "pressing") ? "block" : "none";
+  if(cf) cf.style.display = role === "client" ? "block" : "none";
 }
-function submitSignup(){
+async function submitSignup(){
   const role = document.getElementById("suRole").value;
+  let pressingId = null;
+  let joinCode = null;
+  if(role === "client"){
+    joinCode = (document.getElementById("suJoinCode")?.value || state.joinCode || "").trim().toUpperCase();
+    if(!joinCode){ setState({ authError: "Le code de votre pressing est obligatoire." }); return; }
+    const jp = await resolvePressingByCode(joinCode);
+    if(!jp){ setState({ authError: "Code pressing introuvable. Vérifiez auprès de votre pressing." }); return; }
+    pressingId = jp.id;
+    state.joinCode = joinCode;
+    state.joinPressing = jp;
+  }
+  if(role === "agent"){
+    const ac = (document.getElementById("suAgentJoinCode")?.value || "").trim().toUpperCase();
+    if(ac){
+      const jp = await resolvePressingByCode(ac);
+      if(!jp){ setState({ authError: "Code pressing introuvable." }); return; }
+      pressingId = jp.id;
+    } else {
+      pressingId = document.getElementById("suPressingId")?.value || null;
+    }
+  }
   doSignup({
     fullName: document.getElementById("suFullName").value.trim(),
     phone: document.getElementById("suPhone").value.trim(),
@@ -682,7 +806,8 @@ function submitSignup(){
     role,
     homeAddress: (document.getElementById("suHomeAddress")?.value || "").trim() || null,
     workAddress: (document.getElementById("suWorkAddress")?.value || "").trim() || null,
-    pressingId: role==="agent" ? document.getElementById("suPressingId").value : null
+    pressingId,
+    joinCode
   });
 }
 
@@ -704,6 +829,7 @@ function renderTopBar(){
   let context = "";
   if(state.profile.role === "pressing" && state.myPressing) context = state.myPressing.name;
   if(state.profile.role === "agent" && state.myAgent?.pressings) context = state.myAgent.pressings.name;
+  if(state.profile.role === "client" && state.clientConfig?.pressing?.name) context = state.clientConfig.pressing.name;
   return `<div class="topbar-real">
     <div class="brand-logo"><span class="mark">👔</span> <span class="who"><b>${esc(state.profile.full_name)}</b><br/>${roleLabel}${context ? " · " + esc(context) : ""}</span></div>
     <div class="topbar-right">
@@ -848,15 +974,38 @@ function renderNotifPanel(){
 
 // =============================== CLIENT ===============================
 async function loadPressingsListForClient(){
-  const { data } = await sb.from("pressings").select("id,name,phone,whatsapp,address,owner_profile_id,created_at").eq("status","active").order("created_at",{ascending:true});
-  // Dédoublonnage côté client par nom (insensible à la casse) — garde le plus ancien
-  const seen = new Map();
-  (data || []).forEach(p => {
-    const key = (p.name || "").trim().toLowerCase();
-    if(!key) return;
-    if(!seen.has(key)) seen.set(key, p);
-  });
-  state.pressingsList = Array.from(seen.values());
+  // Plus de catalogue global : isolation multi-tenant
+  state.pressingsList = [];
+  if(state.clientHomePressingId || state.selectedPressingId){
+    await loadClientPressingOnly(state.clientHomePressingId || state.selectedPressingId);
+  }
+}
+async function loadClientPressingOnly(pressingId){
+  if(!pressingId) return;
+  try{
+    let pressing = null;
+    const { data, error } = await sb.from("pressings").select("id,name,phone,whatsapp,address,invite_code").eq("id", pressingId).maybeSingle();
+    if(!error && data) pressing = data;
+    if(!pressing){
+      // Repli via RPC
+      try{
+        const { data: r } = await sb.rpc("get_pressing_public", { p_id: pressingId });
+        pressing = Array.isArray(r) ? r[0] : r;
+      } catch(e){}
+    }
+    state.pressingsList = pressing ? [pressing] : [];
+    state.selectedPressingId = pressingId;
+    const [{ data: zones }, { data: services }, { data: allSlots }] = await Promise.all([
+      sb.from("zones").select("*").eq("is_active", true).order("name"),
+      sb.from("services").select("*").eq("pressing_id", pressingId).eq("is_active", true).order("name"),
+      sb.from("time_slots").select("*").eq("pressing_id", pressingId).eq("is_active", true).order("start_time"),
+    ]);
+    const slots = (allSlots||[]).filter(s => (s.kind||'pickup') === 'pickup');
+    const deliverySlots = (allSlots||[]).filter(s => s.kind === 'delivery');
+    state.clientConfig = { pressing, zones: zones||[], services: services||[], slots, deliverySlots };
+    await loadClientCampaigns(pressingId);
+    await loadFeaturedReviews(pressingId);
+  } catch(e){ console.warn("loadClientPressingOnly:", e.message); }
 }
 async function loadClientOrders(){
   const { data } = await sb.from("orders").select("*, pressings(name), order_items(*)").eq("customer_id", state.profile.id).order("created_at",{ascending:false});
@@ -909,7 +1058,7 @@ async function loadClientCampaigns(pressingId){
 }
 
 function renderClientApp(){
-  if(state.clientScreen === "choosePressing") return renderChoosePressing();
+  if(state.clientScreen === "choosePressing" || state.clientScreen === "joinPressing") return renderJoinPressing();
   if(state.reviewFormOpen) return renderReviewForm();
   if(state.clientScreen === "pass") return renderTopTabs() + renderPassScreen() + renderBottomNav();
   const content = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory }[state.clientScreen]();
@@ -920,22 +1069,42 @@ function renderTopTabs(){
   return `<div class="top-tabs">${items.map(([id,label]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')">${label}</button>`).join("")}</div>`;
 }
 function renderChoosePressing(){
-  if(state.pressingsList.length === 0) return `<div class="screen"><div class="empty">Aucun pressing actif n'est disponible pour le moment.</div></div>`;
+  return renderJoinPressing();
+}
+function renderJoinPressing(){
+  const prefill = state.joinCode || "";
   return `<div class="screen">
-    <div class="section-title">Choisis ton pressing</div>
-    <p class="section-sub">Plusieurs réseaux de pressing sont connectés à la plateforme.</p>
-    <div class="decor-icons" style="justify-content:flex-start;margin:-4px 0 14px;"><span>🧼</span><span>👕</span><span>🧴</span><span>🧺</span></div>
-    ${state.pressingsList.map(p => `<div class="pressing-pick-card" onclick="selectPressing('${p.id}')">
-      <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.address || "")}</div>
-    </div>`).join("")}
+    <div class="section-title">Rejoindre mon pressing</div>
+    <p class="section-sub">Entrez le <b>code</b> fourni par votre pressing, ou scannez son QR code. Vous ne verrez que ce pressing — pas les autres.</p>
+    <div class="card" style="margin-top:12px;">
+      <div class="field">
+        <div class="field-label">Code pressing</div>
+        <input type="text" id="clientJoinCode" value="${esc(prefill)}" placeholder="Ex: AB12CD" style="text-transform:uppercase;letter-spacing:.08em;font-weight:700;" />
+      </div>
+      <button class="btn btn-primary" onclick="submitClientJoinCode()">Continuer</button>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:14px;text-align:center;">Pas de code ? Demandez-le à votre pressing habituel (comptoir, ticket ou WhatsApp).</p>
     ${state.orders.length ? `<button class="btn btn-secondary" onclick="setState({clientScreen:'track'})" style="margin-top:12px;">Voir mes commandes existantes</button>` : ""}
+    <div style="text-align:center;margin-top:24px;font-size:11px;color:var(--mutedLight);">Propulsé par Pressing Connecté</div>
   </div>`;
+}
+async function submitClientJoinCode(){
+  const code = (document.getElementById("clientJoinCode")?.value || "").trim().toUpperCase();
+  if(!code){ alert("Indiquez le code de votre pressing."); return; }
+  const jp = await resolvePressingByCode(code);
+  if(!jp){ alert("Code introuvable. Vérifiez auprès de votre pressing."); return; }
+  state.joinCode = code;
+  state.joinPressing = jp;
+  await linkClientToPressing(jp.id);
+  state.selectedPressingId = jp.id;
+  state.clientHomePressingId = jp.id;
+  await loadClientPressingOnly(jp.id);
+  setState({ clientScreen: "home" });
 }
 async function selectPressing(id){
   state.selectedPressingId = id;
   const pressing = state.pressingsList.find(p => p.id === id);
-  await enrollInNetwork(id);
+  await linkClientToPressing(id);
   const [{ data: zones }, { data: services }, { data: allSlots }] = await Promise.all([
     sb.from("zones").select("*").eq("is_active", true).order("name"),
     sb.from("services").select("*").eq("pressing_id", id).eq("is_active", true).order("name"),
@@ -1006,7 +1175,7 @@ function renderClientHome(){
     <div class="decor-icons" aria-hidden="true"><span>🧺</span><span>👕</span><span>👔</span><span>✨</span></div>
     <p>Nous récupérons vos vêtements chez vous, les confions au pressing et vous les rapportons une fois prêts.</p>
     <button class="btn btn-amber" onclick="clientGo('book')">Faire récupérer mes vêtements</button>
-    <button class="btn btn-outline-white" onclick="setState({clientScreen:'choosePressing'})">Changer de pressing</button>
+    <div style="font-size:12px;opacity:.9;margin-top:8px;">Votre pressing exclusif · Propulsé par Pressing Connecté</div>
   </div>
   <div class="screen" style="padding-bottom:0;">
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-bottom:4px;" onclick="clientGo('pass')">
@@ -1457,7 +1626,7 @@ async function ensurePressingForOwner(profile){
   const name = (profile.full_name || "Mon Pressing").trim() || "Mon Pressing";
   const phone = (profile.phone || "").trim() || null;
   const { data: pressing, error } = await sb.from("pressings").insert({
-    name, phone, owner_profile_id: profile.id, status: "active", address: null
+    name, phone, owner_profile_id: profile.id, status: "active", address: null, invite_code: generateInviteCode()
   }).select("*").single();
   if(error || !pressing){
     console.error("Création pressing échouée:", error);
@@ -1583,12 +1752,78 @@ function renderPressingApp(){
 }
 function renderPressingClientsList(){
   const list = state.pressingClients || [];
+  const code = (state.myPressing?.invite_code || "").toUpperCase();
+  const link = code ? getJoinLink(code) : "";
+  const inviteBox = `
+    <div class="card" style="margin-bottom:16px;border:2px solid var(--brand);background:linear-gradient(160deg,#f0fdf4,#fff);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">Réseau privé — invitation clients</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Vos clients ne voient <b>que votre pressing</b>. Partagez le code ou le lien (QR possible en affichant le lien).</p>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <div style="font-size:22px;font-weight:800;letter-spacing:.12em;color:var(--brand-dark);background:#fff;border:1px dashed var(--brand);padding:10px 16px;border-radius:12px;">${esc(code || "—")}</div>
+        <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;font-size:12px;" onclick="copyPressingInviteLink()">Copier le lien</button>
+        <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;font-size:12px;" onclick="sharePressingInviteWhatsApp()">WhatsApp</button>
+        ${!code ? `<button class="btn btn-primary" style="width:auto;padding:8px 12px;margin:0;font-size:12px;" onclick="ensurePressingInviteCode()">Générer mon code</button>` : ""}
+      </div>
+      ${link ? `<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:12px;">${esc(link)}</div>` : ""}
+      ${code ? `<img alt="QR" style="width:140px;height:140px;border-radius:12px;background:#fff;border:1px solid #e5e7eb;" src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(link)}" />` : ""}
+      <div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:14px;">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Enregistrer un client (invitation directe)</div>
+        <div class="field" style="margin:0 0 8px;"><div class="field-label">Nom</div><input type="text" id="invClientName" placeholder="Nom du client" /></div>
+        <div class="field" style="margin:0 0 8px;"><div class="field-label">Téléphone</div><input type="tel" id="invClientPhone" placeholder="6XX XX XX XX" /></div>
+        <div class="field" style="margin:0 0 8px;"><div class="field-label">Email (optionnel)</div><input type="email" id="invClientEmail" placeholder="pour lui envoyer le lien" /></div>
+        <button class="btn btn-primary" style="margin:0;" onclick="pressingInviteClient()">Préparer l'invitation</button>
+        <p style="font-size:11px;color:var(--muted);margin:8px 0 0;">Génère le message WhatsApp / SMS avec le lien d'activation. Le client crée son compte avec votre code — il est rattaché automatiquement.</p>
+      </div>
+    </div>`;
+  let body = "";
   if(state.pressingClientsError){
-    return `<div class="banner-danger" style="margin-bottom:12px;">Chargement clients partiel (RLS). Exécute CLIENTS_SQL_MIGRATION.sql.<br/><span style="font-size:12px;">${esc(state.pressingClientsError)}</span></div>`
-      + (list.length ? renderPressingClientCards(list) : `<div class="empty">Aucun client inscrit pour ce pressing.</div>`);
+    body = `<div class="banner-danger" style="margin-bottom:12px;">Chargement clients partiel (RLS).<br/><span style="font-size:12px;">${esc(state.pressingClientsError)}</span></div>`
+      + (list.length ? renderPressingClientCards(list) : "");
+  } else if(!list.length){
+    body = `<div class="empty" style="margin-bottom:12px;">Aucun client n'a encore rejoint ton réseau privé.<br/><span style="font-size:13px;color:var(--muted);">Partage le code ou le QR ci-dessus.</span></div>`;
+  } else {
+    body = renderPressingClientCards(list);
   }
-  if(!list.length) return `<div class="empty">Aucun client n'a encore rejoint ton pressing.<br/><span style="font-size:13px;color:var(--muted);">Dès qu'un client choisit ton pressing, il apparaît ici avec nom, téléphone et adresses.</span></div>`;
-  return renderPressingClientCards(list);
+  return inviteBox + body;
+}
+function copyPressingInviteLink(){
+  const code = state.myPressing?.invite_code;
+  if(!code){ alert("Générez d'abord un code."); return; }
+  const link = getJoinLink(code);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link).then(() => alert("Lien copié.")).catch(() => prompt("Copiez ce lien :", link));
+  } else prompt("Copiez ce lien :", link);
+}
+function sharePressingInviteWhatsApp(){
+  const code = state.myPressing?.invite_code;
+  if(!code){ alert("Générez d'abord un code."); return; }
+  const link = getJoinLink(code);
+  const name = state.myPressing?.name || "notre pressing";
+  const msg = encodeURIComponent("Bonjour ! Rejoignez "+name+" sur l'application pour réserver et suivre votre linge.\n\nCode : "+code+"\nLien : "+link+"\n\n(Vous ne verrez que notre pressing.)");
+  window.open("https://wa.me/?text="+msg, "_blank");
+}
+async function ensurePressingInviteCode(){
+  if(!state.myPressing?.id) return;
+  if(state.myPressing.invite_code){ render(); return; }
+  const code = generateInviteCode();
+  const { error } = await sb.from("pressings").update({ invite_code: code }).eq("id", state.myPressing.id);
+  if(error){ alert("Impossible de générer le code : "+error.message); return; }
+  state.myPressing.invite_code = code;
+  render();
+}
+function pressingInviteClient(){
+  const name = (document.getElementById("invClientName")?.value || "").trim();
+  const phone = (document.getElementById("invClientPhone")?.value || "").trim();
+  const email = (document.getElementById("invClientEmail")?.value || "").trim();
+  if(!name || !phone){ alert("Nom et téléphone requis."); return; }
+  const code = state.myPressing?.invite_code;
+  if(!code){ alert("Générez d'abord le code pressing."); return; }
+  const link = getJoinLink(code);
+  const pname = state.myPressing?.name || "votre pressing";
+  const msg = "Bonjour "+name+",\n\n"+pname+" vous invite à suivre vos vêtements et réserver en ligne.\n\n1. Ouvrez : "+link+"\n2. Créez votre compte (code déjà inclus dans le lien)\n\nÀ bientôt !";
+  const digits = phone.replace(/\D/g,"");
+  const wa = digits.startsWith("237") ? digits : ("237"+digits.replace(/^0/,""));
+  window.open("https://wa.me/"+wa+"?text="+encodeURIComponent(msg), "_blank");
 }
 function renderPressingClientCards(list){
   return `<div style="font-size:14px;font-weight:700;margin-bottom:10px;">Clients connectés (${list.length})</div>`
