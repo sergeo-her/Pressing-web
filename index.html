@@ -644,7 +644,13 @@ async function doSignup(payload){
     } }
   });
   state.authLoading = false;
-  if(error){ setState({ authError: error.message }); return; }
+  if(error){
+    let msg = error.message || "Erreur";
+    if(/invalid format|email/i.test(msg)) msg = "Adresse e-mail invalide. Exemple : nom@gmail.com";
+    if(/already registered|already been registered/i.test(msg)) msg = "Cet e-mail est déjà utilisé. Connectez-vous ou utilisez « Mot de passe oublié ».";
+    setState({ authError: msg });
+    return;
+  }
   if(data?.user){
     const patch = {
       full_name: payload.fullName || null,
@@ -734,7 +740,7 @@ function renderResetPassword(){
 function submitNewPassword(){ doUpdatePassword(document.getElementById("newPassword").value); }
 
 function renderSignup(){
-  const roleOptions = [["client","Client"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"],["agent","Agent — rejoint un pressing existant"]];
+  const roleOptions = [["client","Client"],["pressing","Pressing — crée ton réseau (payant, 30j d'essai)"]];
   const joinPrefill = state.joinCode || "";
   return `<div class="screen" style="padding-top:30px;">
     <h1 style="font-size:20px;margin-bottom:4px;">Créer un compte</h1>
@@ -777,6 +783,11 @@ function onSignupRoleChange(){
 }
 async function submitSignup(){
   const role = document.getElementById("suRole").value;
+  const email = (document.getElementById("suEmail")?.value || "").trim();
+  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    setState({ authError: "Adresse e-mail invalide. Exemple : nom@gmail.com" });
+    return;
+  }
   let pressingId = null;
   let joinCode = null;
   if(role === "client"){
@@ -1021,35 +1032,44 @@ async function enrollInNetwork(pressingId){
   } catch(e){ console.warn("enrollInNetwork:", e.message); }
 }
 async function loadPressingClients(){
-  if(!state.myPressing?.id){ state.pressingClients = []; return; }
+  if(!state.myPressing?.id){ state.pressingClients = []; state.pressingClientsError = null; return; }
   try{
-    const { data, error } = await sb.from("pressing_customers")
-      .select("customer_id, joined_at, profiles:customer_id(id, full_name, phone, home_address, work_address, email)")
+    const { data: links, error } = await sb.from("pressing_customers")
+      .select("customer_id, joined_at")
       .eq("pressing_id", state.myPressing.id)
       .order("joined_at", { ascending: false });
-    if(error){
-      console.warn("loadPressingClients:", error.message);
-      // Repli : clients distincts des commandes
-      const fromOrders = [];
-      const seen = new Set();
-      for(const o of (state.pressingOrders || [])){
-        if(!o.customer_id || seen.has(o.customer_id)) continue;
-        seen.add(o.customer_id);
-        fromOrders.push({
-          customer_id: o.customer_id,
-          joined_at: o.created_at,
-          profiles: o.customer || { full_name: o.customer?.full_name, phone: o.customer?.phone }
-        });
-      }
-      state.pressingClients = fromOrders;
-      state.pressingClientsError = error.message;
-      return;
+    if(error) throw error;
+    const ids = (links || []).map(r => r.customer_id).filter(Boolean);
+    let byId = {};
+    if(ids.length){
+      const { data: profs, error: e2 } = await sb.from("profiles")
+        .select("id, full_name, phone, home_address, work_address")
+        .in("id", ids);
+      if(e2) console.warn("profiles clients:", e2.message);
+      (profs || []).forEach(pr => { byId[pr.id] = pr; });
     }
-    state.pressingClients = data || [];
+    state.pressingClients = (links || []).map(r => ({
+      customer_id: r.customer_id,
+      joined_at: r.joined_at,
+      profiles: byId[r.customer_id] || {}
+    }));
     state.pressingClientsError = null;
   } catch(e){
-    state.pressingClients = [];
-    state.pressingClientsError = e.message;
+    console.warn("loadPressingClients:", e.message);
+    // Repli commandes
+    const fromOrders = [];
+    const seen = new Set();
+    for(const o of (state.pressingOrders || [])){
+      if(!o.customer_id || seen.has(o.customer_id)) continue;
+      seen.add(o.customer_id);
+      fromOrders.push({
+        customer_id: o.customer_id,
+        joined_at: o.created_at,
+        profiles: { full_name: o.customer?.full_name, phone: o.customer?.phone }
+      });
+    }
+    state.pressingClients = fromOrders;
+    state.pressingClientsError = fromOrders.length ? null : (e.message || String(e));
   }
 }
 async function loadClientCampaigns(pressingId){
@@ -1682,7 +1702,71 @@ async function loadPressingOrders(){
   }
   state.pressingOrders = orders;
 }
-async function loadPressingAgents(){ const { data } = await sb.from("agents").select("*, profiles(full_name)").eq("pressing_id", state.myPressing.id).eq("status","active"); state.pressingAgents = data || []; }
+async function loadPressingAgents(){
+  if(!state.myPressing?.id){ state.pressingAgents = []; return; }
+  try{
+    const { data, error } = await sb.from("agents").select("id, phone, status, pressing_id").eq("pressing_id", state.myPressing.id).eq("status","active");
+    if(error) throw error;
+    const ids = (data||[]).map(a => a.id);
+    let byId = {};
+    if(ids.length){
+      const { data: profs } = await sb.from("profiles").select("id, full_name, phone").in("id", ids);
+      (profs||[]).forEach(pr => { byId[pr.id] = pr; });
+    }
+    state.pressingAgents = (data||[]).map(a => ({ ...a, profiles: byId[a.id] || { full_name: "Agent", phone: a.phone } }));
+  } catch(e){
+    console.warn("loadPressingAgents:", e.message);
+    state.pressingAgents = [];
+  }
+}
+async function pressingAddAgent(){
+  const name = (document.getElementById("newAgentName")?.value || "").trim();
+  const phone = (document.getElementById("newAgentPhone")?.value || "").trim();
+  const email = (document.getElementById("newAgentEmail")?.value || "").trim().toLowerCase();
+  const password = (document.getElementById("newAgentPassword")?.value || "").trim();
+  if(!name || !phone || !email || !password){ alert("Nom, téléphone, e-mail et mot de passe sont requis."); return; }
+  if(password.length < 6){ alert("Mot de passe : 6 caractères minimum."); return; }
+  if(!state.myPressing?.id) return;
+  try{
+    // Créer le compte Auth (le pressing agit comme « parrain »)
+    const { data: created, error } = await sb.auth.signUp({
+      email, password,
+      options: { data: { full_name: name, phone, role: "agent", pressing_id: state.myPressing.id } }
+    });
+    if(error) throw error;
+    const uid = created?.user?.id;
+    if(!uid){ alert("Compte créé — l'agent doit confirmer son e-mail avant de se connecter."); return; }
+    // Profil agent
+    try{
+      await sb.from("profiles").upsert({
+        id: uid,
+        full_name: name,
+        phone,
+        role: "agent"
+      });
+    } catch(e){ console.warn(e); }
+    const { error: e2 } = await sb.from("agents").upsert({
+      id: uid,
+      pressing_id: state.myPressing.id,
+      phone,
+      status: "active"
+    });
+    if(e2) throw e2;
+    await loadPressingAgents();
+    render();
+    alert("Agent ajouté. Identifiants :\n"+email+"\n"+password+"\n\nCommuniquez-les à votre agent de façon sécurisée.");
+  } catch(e){
+    alert("Impossible d'ajouter l'agent : "+(e.message||e));
+  }
+}
+async function pressingRemoveAgent(agentId){
+  if(!confirm("Retirer cet agent du pressing ?")) return;
+  try{
+    await sb.from("agents").update({ status: "inactive" }).eq("id", agentId).eq("pressing_id", state.myPressing.id);
+    await loadPressingAgents();
+    render();
+  } catch(e){ alert(e.message||e); }
+}
 async function loadMySubscription(){ const { data } = await sb.from("subscriptions").select("*").eq("pressing_id", state.myPressing.id).maybeSingle(); state.mySubscription = data; }
 function attachPressingRealtime(){
   if(state.realtimeChannel) sb.removeChannel(state.realtimeChannel);
@@ -2028,10 +2112,25 @@ function renderPressingConfig(){
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
 
-    <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents</div>
+    <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents de collecte</div>
       <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="refreshPressingAgents()">🔄</button></div>
-    ${state.pressingAgents.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun agent rattaché. Communique à ton agent le nom exact de ton pressing (${esc(state.myPressing?.name||'')}) — il le choisit lors de son inscription, ou depuis son tableau de bord s'il a déjà un compte.</p>` :
-      state.pressingAgents.map(a => `<div class="card"><div style="font-size:14px;font-weight:600;">${esc(a.profiles?.full_name || 'Agent')}</div><div style="font-size:12px;color:var(--muted);">${esc(a.phone||'')}</div></div>`).join("")}
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Les agents sont créés <b>uniquement par vous</b> ici — ils n'apparaissent plus à l'inscription publique.</p>
+    <div class="card" style="margin-bottom:12px;border:1px solid var(--brand);">
+      <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Ajouter un agent</div>
+      <div class="field" style="margin:0 0 8px;"><div class="field-label">Nom</div><input type="text" id="newAgentName" placeholder="Nom de l'agent" /></div>
+      <div class="field" style="margin:0 0 8px;"><div class="field-label">Téléphone</div><input type="tel" id="newAgentPhone" placeholder="6XX XX XX XX" /></div>
+      <div class="field" style="margin:0 0 8px;"><div class="field-label">E-mail (identifiant de connexion)</div><input type="email" id="newAgentEmail" placeholder="agent@email.com" /></div>
+      <div class="field" style="margin:0 0 8px;"><div class="field-label">Mot de passe temporaire</div><input type="text" id="newAgentPassword" placeholder="min. 6 caractères" /></div>
+      <button class="btn btn-primary" style="margin:0;" onclick="pressingAddAgent()">Créer et lier l'agent</button>
+    </div>
+    ${state.pressingAgents.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun agent pour l'instant.</p>` :
+      state.pressingAgents.map(a => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div>
+          <div style="font-size:14px;font-weight:600;">${esc(a.profiles?.full_name || 'Agent')}</div>
+          <div style="font-size:12px;color:var(--muted);">${esc(a.profiles?.phone || a.phone || '')}</div>
+        </div>
+        <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;color:#B42323;" onclick="pressingRemoveAgent('${a.id}')">Retirer</button>
+      </div>`).join("")}
 
     <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Services & tarifs</div>
     ${state.myServices.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun service. Ajoute-en un ci-dessous.</p>` :
