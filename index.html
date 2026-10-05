@@ -22,11 +22,26 @@
     --danger:#C53030; --danger-soft:#FDECEC; --shadow:0 6px 24px rgba(11,18,32,.08); --radius:18px;
   }
   *{ box-sizing:border-box; }
-  html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
-  body{ margin:0; background:var(--bg); font-family:'DM Sans',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:17px; line-height:1.6; color:var(--ink); -webkit-font-smoothing:antialiased; }
-  #app{ max-width:480px; margin:0 auto; min-height:100vh; background:var(--surface); box-shadow:0 0 48px rgba(11,18,32,.08); position:relative; padding-bottom:90px; overflow-x:hidden; }
-  @media (min-width:641px){ #app{ max-width:720px; padding-bottom:28px; } .bottom-nav{ display:none; } .top-tabs{ display:flex !important; } }
-  @media (min-width:1025px){ #app{ max-width:980px; box-shadow:0 0 80px rgba(11,18,32,.1); } }
+  html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; height:100%; }
+  body{ margin:0; min-height:100%; min-height:100dvh; background:var(--bg); font-family:'DM Sans',-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; font-size:17px; line-height:1.6; color:var(--ink); -webkit-font-smoothing:antialiased; }
+  #app{ width:100%; max-width:480px; margin:0 auto; min-height:100vh; min-height:100dvh; background:var(--surface); box-shadow:0 0 48px rgba(11,18,32,.08); position:relative; padding-bottom:90px; overflow-x:hidden; }
+  /* Tablette */
+  @media (min-width:641px){
+    #app{ max-width:720px; padding-bottom:100px; }
+    .top-tabs{ display:flex !important; }
+    .bottom-nav{ max-width:688px; }
+    .stat-grid{ grid-template-columns:repeat(4,1fr); }
+  }
+  /* Ordinateur */
+  @media (min-width:1025px){
+    #app{ max-width:960px; box-shadow:0 0 80px rgba(11,18,32,.1); padding-bottom:110px; }
+    .bottom-nav{ max-width:928px; }
+    .screen{ padding:32px 48px; }
+  }
+  /* Très grand écran */
+  @media (min-width:1280px){
+    #app{ max-width:1040px; }
+  }
   h1,h2,h3{ font-family:'Playfair Display',Georgia,serif; margin:0; letter-spacing:-0.02em; color:var(--ink); }
   h1{ font-size:2rem; font-weight:700; }
   h2{ font-size:1.45rem; font-weight:600; color:var(--brand-dark); }
@@ -123,9 +138,11 @@
   .info-row .val{ font-size:15px; margin-top:2px; }
   .empty{ text-align:center; padding:52px 24px; font-size:15px; color:var(--mutedLight); line-height:1.5; }
   .bottom-nav{ position:fixed; bottom:14px; width:calc(100% - 32px); max-width:448px; left:50%; transform:translateX(-50%); border-radius:22px; background:var(--ink); display:flex; box-shadow:0 10px 30px rgba(15,23,42,.35); z-index:25; padding:4px; }
+  @media (min-width:641px){ .bottom-nav{ width:calc(100% - 48px); } }
   .bottom-nav button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:10px 0; color:rgba(255,255,255,.55); font-size:10.5px; font-weight:700; transition:all .2s; border-radius:18px; }
   .bottom-nav button.active{ background:var(--brand); color:#fff; }
-  .top-tabs{ display:none; gap:6px; padding:0 22px 12px; }
+  .top-tabs{ display:none; gap:6px; padding:0 22px 12px; flex-wrap:wrap; }
+  @media (min-width:641px){ .top-tabs{ display:flex; padding:8px 40px 12px; } }
   .top-tabs button{ padding:9px 18px; border-radius:10px; font-size:14px; font-weight:700; color:var(--muted); }
   .top-tabs button.active{ background:#EEFBF1; color:var(--brand-dark); }
   .wa-btn{ display:flex; align-items:center; justify-content:center; gap:7px; width:100%; padding:15px; border-radius:14px; border:1.5px solid var(--border); font-size:15px; font-weight:700; color:#374151; }
@@ -530,7 +547,7 @@ function freshState(){
     mySubscription:null, pressingConfigView:"none", myServices:[], mySlots:[], myDeliverySlots:[], myReviews:[], draftService:null, draftSlot:null, draftDeliverySlot:null,
 
     myAgent:null, missions:[], joinablePressings:[],
-    pressingClients:[], pressingClientsError:null, pressingDashTab:"orders",
+    pressingClients:[], pressingClientsError:null, pressingDashTab:"orders", pressingOrderSearch:"", pressingClientSearch:"",
 
     campaignsView:"none", pressingCampaigns:[], campaignResponseCounts:{}, draftCampaign:null,
 
@@ -546,7 +563,25 @@ function freshState(){
 }
 let state = freshState();
 
-function render(){ document.getElementById("app").innerHTML = renderRoot(); }
+function render(){
+  const el = document.getElementById("app");
+  if(!el) return;
+  try{
+    const html = renderRoot();
+    if(!html || !String(html).trim()){
+      el.innerHTML = `<div class="center-msg">Chargement…<br/><button class="btn btn-primary" style="margin-top:16px;max-width:220px;" onclick="location.reload()">Recharger</button></div>`;
+      return;
+    }
+    el.innerHTML = html;
+  } catch(e){
+    console.error("render error:", e);
+    el.innerHTML = `<div class="screen"><div class="banner-danger">
+      <div style="font-weight:700;margin-bottom:8px;">Erreur d'affichage</div>
+      <div style="font-size:13px;margin-bottom:12px;">${String(e.message||e).replace(/</g,"&lt;")}</div>
+      <button class="btn btn-primary" style="margin:0;" onclick="location.reload()">Recharger la page</button>
+    </div></div>`;
+  }
+}
 function setState(patch){ Object.assign(state, patch); render(); }
 
 async function init(){
@@ -630,10 +665,10 @@ async function loadProfileAndRoute(retry){
   try{ await runRoleAutoCleanup(); }catch(e){ console.warn(e); }
   await loadNotifications();
   if(notifPollTimer) clearInterval(notifPollTimer);
-  notifPollTimer = setInterval(loadNotifications, 25000);
-  // Push natif après connexion
-  ensurePushSubscription();
+  notifPollTimer = setInterval(loadNotifications, 60000);
   render();
+  // Push en différé (ne bloque pas l'affichage)
+  setTimeout(() => { try{ ensurePushSubscription(); }catch(e){} }, 2500);
 }
 
 async function logout(){
@@ -852,13 +887,20 @@ async function submitSignup(){
 function renderRoot(){
   if(state.view === "loading") return `<div class="center-msg">Chargement...</div>`;
   if(state.view === "auth") return renderAuth();
-  const role = state.profile?.role;
+  if(!state.profile) return `<div class="center-msg">Session…<br/><button class="btn btn-secondary" style="margin-top:12px;max-width:200px;" onclick="location.reload()">Recharger</button></div>`;
+  const role = state.profile.role;
   let body = "";
-  if(role === "client") body = renderClientApp();
-  else if(role === "pressing") body = renderPressingApp();
-  else if(role === "agent") body = renderAgentApp();
-  else if(role === "admin") body = renderAdminApp();
-  const pushBanner = renderPushBanner();
+  try{
+    if(role === "client") body = renderClientApp();
+    else if(role === "pressing") body = renderPressingApp();
+    else if(role === "agent") body = renderAgentApp();
+    else if(role === "admin") body = renderAdminApp();
+    else body = `<div class="screen"><div class="empty">Rôle inconnu.</div></div>`;
+  } catch(e){
+    console.error(e);
+    body = `<div class="screen"><div class="banner-danger">Erreur : ${String(e.message||e).replace(/</g,"&lt;")}</div></div>`;
+  }
+  const pushBanner = (typeof renderPushBanner === "function") ? renderPushBanner() : "";
   return renderTopBar() + (pushBanner || "") + body;
 }
 function renderTopBar(){
@@ -1060,19 +1102,34 @@ async function enrollInNetwork(pressingId){
 async function loadPressingClients(){
   if(!state.myPressing?.id){ state.pressingClients = []; state.pressingClientsError = null; return; }
   try{
+    // RPC SECURITY DEFINER si dispo (évite récursion RLS)
+    try{
+      const { data: rpcData, error: rpcErr } = await sb.rpc("get_pressing_clients", { p_pressing_id: state.myPressing.id });
+      if(!rpcErr && rpcData){
+        state.pressingClients = (rpcData||[]).map(r => ({
+          customer_id: r.customer_id || r.id,
+          joined_at: r.joined_at,
+          profiles: { full_name: r.full_name, phone: r.phone, home_address: r.home_address, work_address: r.work_address }
+        }));
+        state.pressingClientsError = null;
+        return;
+      }
+    } catch(e){}
     const { data: links, error } = await sb.from("pressing_customers")
       .select("customer_id, joined_at")
       .eq("pressing_id", state.myPressing.id)
-      .order("joined_at", { ascending: false });
+      .order("joined_at", { ascending: false })
+      .limit(100);
     if(error) throw error;
     const ids = (links || []).map(r => r.customer_id).filter(Boolean);
     let byId = {};
     if(ids.length){
-      const { data: profs, error: e2 } = await sb.from("profiles")
-        .select("id, full_name, phone, home_address, work_address")
-        .in("id", ids);
-      if(e2) console.warn("profiles clients:", e2.message);
-      (profs || []).forEach(pr => { byId[pr.id] = pr; });
+      // Par paquets pour limiter la charge / RLS
+      for(let i=0;i<ids.length;i+=20){
+        const chunk = ids.slice(i,i+20);
+        const { data: profs } = await sb.from("profiles").select("id, full_name, phone, home_address, work_address").in("id", chunk);
+        (profs || []).forEach(pr => { byId[pr.id] = pr; });
+      }
     }
     state.pressingClients = (links || []).map(r => ({
       customer_id: r.customer_id,
@@ -1082,7 +1139,6 @@ async function loadPressingClients(){
     state.pressingClientsError = null;
   } catch(e){
     console.warn("loadPressingClients:", e.message);
-    // Repli commandes
     const fromOrders = [];
     const seen = new Set();
     for(const o of (state.pressingOrders || [])){
@@ -1095,7 +1151,10 @@ async function loadPressingClients(){
       });
     }
     state.pressingClients = fromOrders;
-    state.pressingClientsError = fromOrders.length ? null : (e.message || String(e));
+    const msg = e.message || String(e);
+    state.pressingClientsError = /stack depth/i.test(msg)
+      ? "Récursion RLS — exécutez FIX_RLS_PERFORMANCE.sql dans Supabase."
+      : (fromOrders.length ? null : msg);
   }
 }
 async function loadClientCampaigns(pressingId){
@@ -1107,8 +1166,9 @@ function renderClientApp(){
   if(state.clientScreen === "choosePressing" || state.clientScreen === "joinPressing") return renderJoinPressing();
   if(state.reviewFormOpen) return renderReviewForm();
   if(state.clientScreen === "pass") return renderTopTabs() + renderPassScreen() + renderBottomNav();
-  const content = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory }[state.clientScreen]();
-  return renderTopTabs() + content + renderBottomNav();
+  const map = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory };
+  const fn = map[state.clientScreen] || renderClientHome;
+  return renderTopTabs() + fn() + renderBottomNav();
 }
 function renderTopTabs(){
   const items = [["home","Accueil"],["book","Réserver"],["track","Suivi"],["pass","Mon Pass"],["history","Historique"]];
@@ -1753,36 +1813,45 @@ async function pressingAddAgent(){
   if(!name || !phone || !email || !password){ alert("Nom, téléphone, e-mail et mot de passe sont requis."); return; }
   if(password.length < 6){ alert("Mot de passe : 6 caractères minimum."); return; }
   if(!state.myPressing?.id) return;
+  // Client séparé : ne pas remplacer la session du pressing
+  const tempSb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
   try{
-    // Créer le compte Auth (le pressing agit comme « parrain »)
-    const { data: created, error } = await sb.auth.signUp({
+    const { data: created, error } = await tempSb.auth.signUp({
       email, password,
       options: { data: { full_name: name, phone, role: "agent", pressing_id: state.myPressing.id } }
     });
-    if(error) throw error;
+    if(error){
+      if(/already|registered|exists/i.test(error.message||"")){
+        alert("Cet e-mail est déjà utilisé. Choisissez un autre e-mail pour le nouvel agent, ou demandez-lui de se connecter puis contactez l'admin pour le rattacher.");
+        return;
+      }
+      throw error;
+    }
     const uid = created?.user?.id;
-    if(!uid){ alert("Compte créé — l'agent doit confirmer son e-mail avant de se connecter."); return; }
-    // Profil agent
+    if(!uid){
+      alert("Compte créé. L'agent doit confirmer son e-mail puis se connecter. Identifiants :\n"+email+"\n"+password);
+      return;
+    }
+    // Écritures avec la session pressing (owner)
     try{
-      await sb.from("profiles").upsert({
-        id: uid,
-        full_name: name,
-        phone,
-        role: "agent"
-      });
-    } catch(e){ console.warn(e); }
+      await sb.from("profiles").upsert({ id: uid, full_name: name, phone, role: "agent" });
+    } catch(e){ console.warn("profile agent:", e.message); }
     const { error: e2 } = await sb.from("agents").upsert({
-      id: uid,
-      pressing_id: state.myPressing.id,
-      phone,
-      status: "active"
+      id: uid, pressing_id: state.myPressing.id, phone, status: "active"
     });
     if(e2) throw e2;
     await loadPressingAgents();
     render();
-    alert("Agent ajouté. Identifiants :\n"+email+"\n"+password+"\n\nCommuniquez-les à votre agent de façon sécurisée.");
+    alert("Agent ajouté.\nE-mail : "+email+"\nMot de passe : "+password+"\n\nCommuniquez-les à l'agent de façon sécurisée.");
   } catch(e){
-    alert("Impossible d'ajouter l'agent : "+(e.message||e));
+    const msg = e.message || String(e);
+    if(/stack depth/i.test(msg)){
+      alert("Erreur base (RLS). Exécutez FIX_RLS_PERFORMANCE.sql dans Supabase, puis réessayez avec un e-mail jamais utilisé.");
+    } else {
+      alert("Impossible d'ajouter l'agent : "+msg);
+    }
   }
 }
 async function pressingRemoveAgent(agentId){
@@ -1847,18 +1916,57 @@ function renderPressingApp(){
       <button class="chip ${state.pressingDashTab!=='clients'?'active':''}" onclick="setState({pressingDashTab:'orders'})">📦 Commandes</button>
       <button class="chip ${state.pressingDashTab==='clients'?'active':''}" onclick="setState({pressingDashTab:'clients'}); loadPressingClients().then(render);">👥 Clients (${(state.pressingClients||[]).length})</button>
     </div>
-    ${state.pressingDashTab === "clients" ? renderPressingClientsList() : `
+    ${state.pressingDashTab === "clients" ? renderPressingClientsList() : renderPressingOrdersList()}
+  </div>`;
+}
+function filterPressingOrders(orders){
+  const q = (state.pressingOrderSearch || "").trim().toLowerCase();
+  if(!q) return orders || [];
+  const digits = q.replace(/\D/g, "");
+  return (orders || []).filter(o => {
+    const num = String(o.order_number || "").toLowerCase();
+    const name = String(o.customer?.full_name || "").toLowerCase();
+    const phone = String(o.customer?.phone || "").toLowerCase();
+    const phoneDigits = phone.replace(/\D/g, "");
+    if(num.includes(q)) return true;
+    if(name.includes(q)) return true;
+    if(phone.includes(q)) return true;
+    if(digits && phoneDigits.includes(digits)) return true;
+    if(String(o.id || "").toLowerCase().startsWith(q)) return true;
+    return false;
+  });
+}
+function onPressingOrderSearch(val){
+  state.pressingOrderSearch = val;
+  render();
+  requestAnimationFrame(() => {
+    const el = document.getElementById("pressingOrderSearch");
+    if(el){ el.focus(); try{ const n = el.value.length; el.setSelectionRange(n, n); }catch(e){} }
+  });
+}
+function renderPressingOrdersList(){
+  const all = state.pressingOrders || [];
+  const filtered = filterPressingOrders(all);
+  const q = state.pressingOrderSearch || "";
+  return `
     <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Commandes</div>
-    ${state.pressingOrdersError ? `<div class="banner-danger" style="margin-bottom:12px;">Impossible de charger les commandes (droits RLS). Exécute PASS_SQL_MIGRATION.sql dans Supabase.<br/><span style="font-size:12px;">${esc(state.pressingOrdersError)}</span></div>` : ""}
-    ${state.pressingOrders.length===0 ? `<div class="empty">Aucune commande pour le moment.</div>` :
-      state.pressingOrders.map(o => `<div class="order-card" onclick="pressingSelect('${o.id}')">
-        <div class="top"><div><div style="font-size:14px;font-weight:700;">${o.order_number}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div><span style="color:var(--mutedLight);">›</span></div>
+    <div class="field" style="margin:0 0 12px;">
+      <input type="search" id="pressingOrderSearch" value="${esc(q)}"
+        placeholder="Rechercher : nom client, n° commande, téléphone…"
+        oninput="onPressingOrderSearch(this.value)"
+        style="width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:15px;" />
+      ${q ? `<div style="font-size:12px;color:var(--muted);margin-top:6px;">${filtered.length} résultat(s) sur ${all.length}</div>` : ""}
+    </div>
+    ${state.pressingOrdersError ? `<div class="banner-danger" style="margin-bottom:12px;">Impossible de charger les commandes (droits RLS).<br/><span style="font-size:12px;">${esc(state.pressingOrdersError)}</span></div>` : ""}
+    ${all.length===0 ? `<div class="empty">Aucune commande pour le moment.</div>` :
+      filtered.length===0 ? `<div class="empty">Aucune commande ne correspond à « ${esc(q)} ».</div>` :
+      filtered.map(o => `<div class="order-card" onclick="pressingSelect('${o.id}')">
+        <div class="top"><div><div style="font-size:14px;font-weight:700;">${esc(o.order_number||'')}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}${o.customer?.phone ? ' · '+esc(o.customer.phone) : ''}</div></div><span style="color:var(--mutedLight);">›</span></div>
         <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
-          <span class="badge">${STATUS_LABELS[o.order_status]}</span><span style="font-size:12px;color:var(--muted);">${fcfa(o.final_amount || o.estimated_amount)}</span>
+          <span class="badge">${STATUS_LABELS[o.order_status]||o.order_status}</span><span style="font-size:12px;color:var(--muted);">${fcfa(o.final_amount || o.estimated_amount)}</span>
         </div>
       </div>`).join("")}
-    `}
-  </div>`;
+  `;
 }
 function renderPressingClientsList(){
   const list = state.pressingClients || [];
@@ -1892,14 +2000,29 @@ function renderPressingClientsList(){
         <p style="font-size:11px;color:var(--muted);margin:8px 0 0;">Génère le message WhatsApp / SMS avec le lien d'activation. Le client crée son compte avec votre code — il est rattaché automatiquement.</p>
       </div>
     </div>`;
+  const cq = (state.pressingClientSearch || "").trim().toLowerCase();
+  const filteredClients = !cq ? list : list.filter(row => {
+    const c = row.profiles || {};
+    const name = String(c.full_name||"").toLowerCase();
+    const phone = String(c.phone||"").toLowerCase();
+    const dig = cq.replace(/\D/g,"");
+    return name.includes(cq) || phone.includes(cq) || (dig && phone.replace(/\D/g,"").includes(dig));
+  });
+  const searchBox = list.length ? `
+    <div class="field" style="margin:0 0 12px;">
+      <input type="search" id="pressingClientSearch" value="${esc(state.pressingClientSearch||'')}"
+        placeholder="Rechercher un client (nom ou téléphone)…"
+        oninput="state.pressingClientSearch=this.value; render(); requestAnimationFrame(()=>{ const el=document.getElementById('pressingClientSearch'); if(el){ el.focus(); try{ const n=el.value.length; el.setSelectionRange(n,n);}catch(e){} } });"
+        style="width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:15px;" />
+    </div>` : "";
   let body = "";
   if(state.pressingClientsError){
     body = `<div class="banner-danger" style="margin-bottom:12px;">Chargement clients partiel (RLS).<br/><span style="font-size:12px;">${esc(state.pressingClientsError)}</span></div>`
-      + (list.length ? renderPressingClientCards(list) : "");
+      + searchBox + (filteredClients.length ? renderPressingClientCards(filteredClients) : "");
   } else if(!list.length){
-    body = `<div class="empty" style="margin-bottom:12px;">Aucun client n'a encore rejoint ton réseau privé.<br/><span style="font-size:13px;color:var(--muted);">Partage le code ou le QR ci-dessus.</span></div>`;
+    body = `<div class="empty" style="margin-bottom:12px;">Aucun client n'a encore rejoint ton réseau.<br/><span style="font-size:13px;color:var(--muted);">Partage le code ou le QR ci-dessus.</span></div>`;
   } else {
-    body = renderPressingClientCards(list);
+    body = searchBox + (filteredClients.length ? renderPressingClientCards(filteredClients) : `<div class="empty">Aucun client pour « ${esc(cq)} ».</div>`);
   }
   return inviteBox + body;
 }
@@ -2133,16 +2256,17 @@ function renderSlotList(list, kindLabel){
   </div>`).join("");
 }
 function renderSlotForm(kind, draft){
+  const pfx = kind === "pickup" ? "cfgPick" : "cfgDel";
   return `<div class="card">
     <div class="field-label">Nouveau créneau de ${kind==='pickup'?'collecte':'livraison'}</div>
-    <input type="text" placeholder="Label (ex: Tournée du matin)" value="${esc(draft.label)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.label=this.value" style="margin-bottom:8px;" />
-    <input type="text" placeholder="Quartier (ex: Bastos, Messassi...)" value="${esc(draft.zone_label)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.zone_label=this.value" style="margin-bottom:8px;" />
-    <input type="text" placeholder="Point de repère (optionnel)" value="${esc(draft.landmark)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.landmark=this.value" style="margin-bottom:8px;" />
+    <input type="text" id="${pfx}Label" placeholder="Label (ex: Tournée du matin)" value="${esc(draft.label||'')}" style="margin-bottom:8px;" />
+    <input type="text" id="${pfx}Zone" placeholder="Quartier (ex: Bastos, Messassi...)" value="${esc(draft.zone_label||'')}" style="margin-bottom:8px;" />
+    <input type="text" id="${pfx}Landmark" placeholder="Point de repère (optionnel)" value="${esc(draft.landmark||'')}" style="margin-bottom:8px;" />
     <div style="display:flex;gap:8px;">
-      <input type="time" value="${esc(draft.start_time)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.start_time=this.value" style="flex:1;" />
-      <input type="time" value="${esc(draft.end_time)}" oninput="state.${kind==='pickup'?'draftSlot':'draftDeliverySlot'}.end_time=this.value" style="flex:1;" />
+      <input type="time" id="${pfx}Start" value="${esc(draft.start_time||'08:00')}" style="flex:1;" />
+      <input type="time" id="${pfx}End" value="${esc(draft.end_time||'10:00')}" style="flex:1;" />
     </div>
-    <button class="btn btn-primary" onclick="addSlotConfig('${kind}')" style="margin-top:10px;">Ajouter le créneau</button>
+    <button class="btn btn-primary" type="button" onclick="addSlotConfig('${kind}')" style="margin-top:10px;">Ajouter le créneau</button>
   </div>`;
 }
 function renderPressingConfig(){
@@ -2181,12 +2305,12 @@ function renderPressingConfig(){
       </div>`).join("")}
     <div class="card">
       <div class="field-label">Nouveau service</div>
-      <input type="text" placeholder="Nom (ex: Lavage + repassage)" value="${esc(ds.name)}" oninput="state.draftService.name=this.value" style="margin-bottom:8px;" />
+      <input type="text" id="cfgSvcName" placeholder="Nom (ex: Lavage + repassage)" value="${esc(ds.name)}" style="margin-bottom:8px;" />
       <div style="display:flex;gap:8px;">
-        <input type="text" placeholder="Unité (vêtement, kg...)" value="${esc(ds.unit)}" oninput="state.draftService.unit=this.value" style="flex:1;" />
-        <input type="number" placeholder="Prix FCFA" value="${esc(ds.price)}" oninput="state.draftService.price=this.value" style="flex:1;" />
+        <input type="text" id="cfgSvcUnit" placeholder="Unité (vêtement, kg...)" value="${esc(ds.unit)}" style="flex:1;" />
+        <input type="number" id="cfgSvcPrice" placeholder="Prix FCFA" value="${esc(ds.price)}" style="flex:1;" />
       </div>
-      <button class="btn btn-primary" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
+      <button class="btn btn-primary" type="button" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
     </div>
 
     <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">📥 Créneaux de collecte par quartier</div>
@@ -2213,23 +2337,41 @@ function renderPressingConfig(){
 }
 function closePressingConfig(){ setState({ pressingConfigView:"none", draftService:null, draftSlot:null, draftDeliverySlot:null }); }
 async function addService(){
-  const d = state.draftService; const pid = myPressingId();
-  if(!d || !d.name || !d.price){ alert("Nom et prix requis."); return; }
-  await sb.from("services").insert({ pressing_id: pid, name:d.name, unit:d.unit||'vêtement', price:parseInt(d.price,10), is_active:true });
-  state.draftService = null;
-  await loadMyPressingConfig(); render();
+  const pid = myPressingId();
+  const name = (document.getElementById("cfgSvcName")?.value || state.draftService?.name || "").trim();
+  const unit = (document.getElementById("cfgSvcUnit")?.value || state.draftService?.unit || "vêtement").trim();
+  const price = parseInt(document.getElementById("cfgSvcPrice")?.value || state.draftService?.price || "0", 10);
+  if(!name || !price){ alert("Nom et prix requis."); return; }
+  try{
+    const { error } = await sb.from("services").insert({ pressing_id: pid, name, unit: unit||'vêtement', price, is_active:true });
+    if(error) throw error;
+    state.draftService = { name:"", unit:"vêtement", price:"" };
+    await loadMyPressingConfig(); render();
+  } catch(e){ alert("Service : "+(e.message||e)); }
 }
 async function toggleServiceActive(id, current){
   await sb.from("services").update({ is_active: !current }).eq("id", id);
   await loadMyPressingConfig(); render();
 }
 async function addSlotConfig(kind){
-  const d = kind === "pickup" ? state.draftSlot : state.draftDeliverySlot;
   const pid = myPressingId();
-  if(!d || !d.label){ alert("Label requis."); return; }
-  await sb.from("time_slots").insert({ pressing_id: pid, kind, label:d.label, zone_label:d.zone_label||null, landmark:d.landmark||null, start_time:d.start_time, end_time:d.end_time, is_active:true });
-  if(kind === "pickup") state.draftSlot = null; else state.draftDeliverySlot = null;
-  await loadMyPressingConfig(); render();
+  const prefix = kind === "pickup" ? "cfgPick" : "cfgDel";
+  const label = (document.getElementById(prefix+"Label")?.value || "").trim();
+  const zone_label = (document.getElementById(prefix+"Zone")?.value || "").trim() || null;
+  const landmark = (document.getElementById(prefix+"Landmark")?.value || "").trim() || null;
+  const start_time = (document.getElementById(prefix+"Start")?.value || "08:00").trim();
+  const end_time = (document.getElementById(prefix+"End")?.value || "10:00").trim();
+  if(!label){ alert("Label requis."); return; }
+  try{
+    const { error } = await sb.from("time_slots").insert({
+      pressing_id: pid, kind, label, zone_label, landmark,
+      start_time, end_time, is_active:true
+    });
+    if(error) throw error;
+    if(kind === "pickup") state.draftSlot = { label:"", zone_label:"", landmark:"", start_time:"08:00", end_time:"10:00" };
+    else state.draftDeliverySlot = { label:"", zone_label:"", landmark:"", start_time:"08:00", end_time:"10:00" };
+    await loadMyPressingConfig(); render();
+  } catch(e){ alert("Créneau : "+(e.message||e)); }
 }
 async function toggleSlotActive(id, current){
   await sb.from("time_slots").update({ is_active: !current }).eq("id", id);
@@ -2277,9 +2419,9 @@ function renderNewCampaignForm(){
   const d = state.draftCampaign;
   return `<div class="screen">
     <div class="header-title" style="margin-bottom:12px;">Nouvelle campagne de ramassage</div>
-    <div class="field"><div class="field-label">Titre</div><input type="text" value="${esc(d.title)}" oninput="state.draftCampaign.title=this.value" placeholder="Ex : Ramassage du quartier" /></div>
-    <div class="field"><div class="field-label">Message aux clients</div><input type="text" value="${esc(d.message)}" oninput="state.draftCampaign.message=this.value" placeholder="Ex : Ramassage prévu mercredi..." /></div>
-    <div class="field"><div class="field-label">Date</div><input type="date" value="${esc(d.campaign_date)}" oninput="state.draftCampaign.campaign_date=this.value" /></div>
+    <div class="field"><div class="field-label">Titre</div><input type="text" id="campTitle" value="${esc(d.title)}" placeholder="Ex : Ramassage du quartier" /></div>
+    <div class="field"><div class="field-label">Message aux clients</div><input type="text" id="campMessage" value="${esc(d.message)}" placeholder="Ex : Ramassage prévu mercredi..." /></div>
+    <div class="field"><div class="field-label">Date</div><input type="date" id="campDate" value="${esc(d.campaign_date)}" /></div>
     <div class="field"><div class="field-label">Mode</div>
       <div class="toggle-row">
         <button class="toggle-card ${d.mode==='domicile'?'active':''}" onclick="state.draftCampaign.mode='domicile';render()">🏠<br/>À domicile</button>
@@ -2287,10 +2429,10 @@ function renderNewCampaignForm(){
       </div></div>
     <div class="field"><div class="field-label">Créneaux par quartier</div>
       ${d.slots.map((s,i) => `<div class="slot-row">
-        <input type="text" value="${esc(s.zone_label)}" placeholder="Quartier (ex: Bastos)" style="flex:2;" oninput="state.draftCampaign.slots[${i}].zone_label=this.value" />
-        <input type="time" value="${esc(s.start_time)}" style="flex:1;" oninput="state.draftCampaign.slots[${i}].start_time=this.value" />
-        <input type="time" value="${esc(s.end_time)}" style="flex:1;" oninput="state.draftCampaign.slots[${i}].end_time=this.value" />
-        <button class="icon-x" onclick="removeSlotRow(${i})">✕</button>
+        <input type="text" id="campZone${i}" value="${esc(s.zone_label)}" placeholder="Quartier (ex: Bastos)" style="flex:2;" />
+        <input type="time" id="campStart${i}" value="${esc(s.start_time)}" style="flex:1;" />
+        <input type="time" id="campEnd${i}" value="${esc(s.end_time)}" style="flex:1;" />
+        <button class="icon-x" type="button" onclick="removeSlotRow(${i})">✕</button>
       </div>`).join("")}
       <button class="btn btn-secondary" onclick="addSlotRow()">+ Ajouter un quartier/heure</button>
     </div>
@@ -2300,15 +2442,45 @@ function renderNewCampaignForm(){
 function addSlotRow(){ state.draftCampaign.slots.push({zone_label:"",start_time:"07:00",end_time:"09:00"}); render(); }
 function removeSlotRow(i){ state.draftCampaign.slots.splice(i,1); render(); }
 async function publishCampaign(){
-  const d = state.draftCampaign; const pid = myPressingId();
+  const pid = myPressingId();
+  if(!pid){ alert("Pressing introuvable."); return; }
+  // Lire le formulaire directement (fiable sur mobile)
+  const title = (document.getElementById("campTitle")?.value || state.draftCampaign?.title || "").trim();
+  const message = (document.getElementById("campMessage")?.value || state.draftCampaign?.message || "").trim();
+  const campaign_date = (document.getElementById("campDate")?.value || state.draftCampaign?.campaign_date || "").trim();
+  const mode = state.draftCampaign?.mode || "domicile";
+  if(!title || !campaign_date){ alert("Titre et date requis."); return; }
+  const slots = [];
+  const n = (state.draftCampaign?.slots || []).length || 1;
+  for(let i=0;i<n;i++){
+    const zone = (document.getElementById("campZone"+i)?.value || state.draftCampaign?.slots?.[i]?.zone_label || "").trim();
+    const start = (document.getElementById("campStart"+i)?.value || state.draftCampaign?.slots?.[i]?.start_time || "07:00").trim();
+    const end = (document.getElementById("campEnd"+i)?.value || state.draftCampaign?.slots?.[i]?.end_time || "09:00").trim();
+    if(zone) slots.push({ zone_label: zone, start_time: start, end_time: end });
+  }
   try{
-    const { data: camp, error } = await sb.from("campaigns").insert({ pressing_id: pid, created_by: state.profile.id, title:d.title, message:d.message, campaign_date:d.campaign_date, mode:d.mode, status:"published" }).select().single();
+    const { data: camp, error } = await sb.from("campaigns").insert({
+      pressing_id: pid,
+      created_by: state.profile.id,
+      title, message, campaign_date, mode, status: "published"
+    }).select("id").single();
     if(error) throw error;
-    const slots = d.slots.filter(s=>s.zone_label).map(s => ({ campaign_id:camp.id, zone_label:s.zone_label, start_time:s.start_time, end_time:s.end_time }));
-    if(slots.length) await sb.from("campaign_slots").insert(slots);
+    if(slots.length && camp?.id){
+      const { error: e2 } = await sb.from("campaign_slots").insert(
+        slots.map(s => ({ campaign_id: camp.id, zone_label: s.zone_label, start_time: s.start_time, end_time: s.end_time }))
+      );
+      if(e2) console.warn("campaign_slots:", e2.message);
+    }
     await loadPressingCampaigns();
-    setState({ campaignsView:"list" });
-  } catch(e){ alert("Erreur : " + e.message); }
+    setState({ campaignsView: "list" });
+  } catch(e){
+    const msg = e.message || String(e);
+    if(/timeout|Failed to fetch|network/i.test(msg)){
+      alert("Réseau lent ou base saturée. Réessayez dans quelques secondes. Si ça continue : exécutez FIX_RLS_PERFORMANCE.sql.");
+    } else {
+      alert("Erreur : " + msg);
+    }
+  }
 }
 
 // =============================== AGENT ===============================
@@ -3637,6 +3809,12 @@ pressingSelect = function(id){ pushNav(); return _pressingSelect(id); };
 const _adminSelectPressing = adminSelectPressing;
 adminSelectPressing = async function(id){ pushNav(); return _adminSelectPressing(id); };
 
+window.addEventListener("error", function(ev){
+  console.error("window error", ev.error || ev.message);
+});
+window.addEventListener("unhandledrejection", function(ev){
+  console.error("unhandledrejection", ev.reason);
+});
 init();
 </script>
 </body>

@@ -1,5 +1,5 @@
 // Service Worker — PWA + notifications push natives (Web Push / VAPID)
-const SW_VERSION = "pc-push-v2";
+const SW_VERSION = "pc-push-v3";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
