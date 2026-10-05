@@ -604,14 +604,62 @@ async function init(){
   registerServiceWorker();
 }
 
+async function ensureProfileRow(){
+  const uid = state.session?.user?.id;
+  if(!uid) return null;
+  // 1) Lecture
+  let { data, error } = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
+  if(data && !error) return data;
+  // 2) Création / réparation depuis les métadonnées Auth
+  const meta = state.session.user.user_metadata || {};
+  const row = {
+    id: uid,
+    full_name: meta.full_name || meta.name || (state.session.user.email || "").split("@")[0] || "Utilisateur",
+    phone: meta.phone || null,
+    role: meta.role || "client",
+    home_address: meta.home_address || null,
+    work_address: meta.work_address || null
+  };
+  // upsert
+  const up = await sb.from("profiles").upsert(row, { onConflict: "id" }).select("*").maybeSingle();
+  if(up.data) return up.data;
+  // 3) insert simple
+  const ins = await sb.from("profiles").insert(row).select("*").maybeSingle();
+  if(ins.data) return ins.data;
+  // 4) relecture
+  const again = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
+  if(again.data) return again.data;
+  console.warn("ensureProfileRow failed", error, up.error, ins.error, again.error);
+  return null;
+}
+
 async function loadProfileAndRoute(retry){
-  const { data, error } = await sb.from("profiles").select("*").eq("id", state.session.user.id).single();
-  if(error || !data){
-    if(!retry){ setTimeout(() => loadProfileAndRoute(true), 900); return; }
-    state.view = "auth"; state.authError = "Profil introuvable — réessaie de te connecter."; render(); return;
+  const attempt = typeof retry === "number" ? retry : 0;
+  let data = null;
+  try{
+    data = await ensureProfileRow();
+  } catch(e){
+    console.warn("loadProfileAndRoute:", e);
+  }
+  if(!data){
+    if(attempt < 3){
+      setTimeout(() => loadProfileAndRoute(attempt + 1), 600 + attempt * 400);
+      return;
+    }
+    const email = state.session?.user?.email || "";
+    state.view = "auth";
+    state.authError = "Profil introuvable pour "+email+". Exécute PROFILE_FIX.sql dans Supabase (SQL Editor), puis reconnecte-toi.";
+    // Ne pas forcément déconnecter : laisse la session pour retry après SQL
+    render();
+    return;
   }
   const fresh = freshState();
   fresh.session = state.session; fresh.profile = data; fresh.view = "app";
+  // Conserver join code si présent
+  try{
+    const jc = localStorage.getItem("pc_join_code");
+    if(jc){ fresh.joinCode = jc; }
+  } catch(e){}
   state = fresh;
 
   if(data.role === "client"){
