@@ -1,15 +1,17 @@
 -- ============================================================
 -- Clients liés au pressing + adresses domicile / travail
--- À exécuter dans Supabase → SQL Editor → Run
--- (peut être relancé sans danger)
+-- Supabase → SQL Editor → Run (relançable sans erreur)
 -- ============================================================
 
--- Helpers (si absents)
+-- Helpers
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
 AS $$
-  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin');
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin'::user_role
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION public.my_pressing_ids()
@@ -22,7 +24,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.my_pressing_ids() TO authenticated;
 
--- Colonnes adresse sur profiles
+-- Colonnes adresse
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS home_address TEXT,
   ADD COLUMN IF NOT EXISTS work_address TEXT;
@@ -40,16 +42,18 @@ CREATE INDEX IF NOT EXISTS idx_pressing_customers_customer ON pressing_customers
 
 ALTER TABLE pressing_customers ENABLE ROW LEVEL SECURITY;
 
+-- Drop TOUTES les policies connues avant recréation
 DROP POLICY IF EXISTS "pc_insert_own" ON pressing_customers;
 DROP POLICY IF EXISTS "pc_select" ON pressing_customers;
 DROP POLICY IF EXISTS "pc_admin" ON pressing_customers;
+DROP POLICY IF EXISTS "pc_update_admin" ON pressing_customers;
+DROP POLICY IF EXISTS "pc_delete_admin" ON pressing_customers;
+DROP POLICY IF EXISTS "pc_all_admin" ON pressing_customers;
 
--- Client s'inscrit lui-même
 CREATE POLICY "pc_insert_own" ON pressing_customers
   FOR INSERT TO authenticated
   WITH CHECK (auth.uid() = customer_id OR public.is_admin());
 
--- Lecture : client voit ses liens ; pressing voit ses clients ; admin voit tout
 CREATE POLICY "pc_select" ON pressing_customers
   FOR SELECT TO authenticated
   USING (
@@ -60,13 +64,12 @@ CREATE POLICY "pc_select" ON pressing_customers
 
 CREATE POLICY "pc_update_admin" ON pressing_customers
   FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
 
--- Profiles : s'assurer que pressing peut lire les infos clients de son réseau
--- (si policy "profiles_select_authenticated_basic" existe déjà avec USING true, c'est OK)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
--- Upsert des clients déjà présents via commandes historiques
+-- Rattrapage clients déjà présents via commandes
 INSERT INTO pressing_customers (pressing_id, customer_id, joined_at)
 SELECT DISTINCT o.pressing_id, o.customer_id, MIN(o.created_at)
 FROM orders o
