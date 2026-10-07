@@ -607,29 +607,44 @@ async function init(){
 async function ensureProfileRow(){
   const uid = state.session?.user?.id;
   if(!uid) return null;
-  // 1) Lecture
+  const meta = state.session.user.user_metadata || {};
+  const full_name = meta.full_name || meta.name || (state.session.user.email || "").split("@")[0] || "Utilisateur";
+  const phone = meta.phone || null;
+  let role = meta.role || "client";
+  if(!["client","pressing","agent","admin"].includes(role)) role = "client";
+
+  // 1) RPC SECURITY DEFINER (contourne RLS si installée)
+  try{
+    const { data: rpcData, error: rpcErr } = await sb.rpc("ensure_my_profile", {
+      p_full_name: full_name,
+      p_phone: phone,
+      p_role: role
+    });
+    if(!rpcErr && rpcData){
+      if(Array.isArray(rpcData) && rpcData[0]) return rpcData[0];
+      if(rpcData.id) return rpcData;
+    }
+    if(rpcErr) console.warn("ensure_my_profile rpc:", rpcErr.message);
+  } catch(e){ console.warn(e); }
+
+  // 2) Lecture directe
   let { data, error } = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
   if(data && !error) return data;
-  // 2) Création / réparation depuis les métadonnées Auth
-  const meta = state.session.user.user_metadata || {};
-  const row = {
-    id: uid,
-    full_name: meta.full_name || meta.name || (state.session.user.email || "").split("@")[0] || "Utilisateur",
-    phone: meta.phone || null,
-    role: meta.role || "client",
-    home_address: meta.home_address || null,
-    work_address: meta.work_address || null
-  };
-  // upsert
+
+  // 3) Upsert client
+  const row = { id: uid, full_name, phone, role, home_address: meta.home_address || null, work_address: meta.work_address || null };
   const up = await sb.from("profiles").upsert(row, { onConflict: "id" }).select("*").maybeSingle();
   if(up.data) return up.data;
-  // 3) insert simple
+  if(up.error) console.warn("profiles upsert:", up.error.message);
+
   const ins = await sb.from("profiles").insert(row).select("*").maybeSingle();
   if(ins.data) return ins.data;
-  // 4) relecture
+  if(ins.error) console.warn("profiles insert:", ins.error.message);
+
   const again = await sb.from("profiles").select("*").eq("id", uid).maybeSingle();
   if(again.data) return again.data;
-  console.warn("ensureProfileRow failed", error, up.error, ins.error, again.error);
+
+  state._profileLastError = (up.error && up.error.message) || (ins.error && ins.error.message) || (error && error.message) || "inconnu";
   return null;
 }
 
@@ -648,7 +663,8 @@ async function loadProfileAndRoute(retry){
     }
     const email = state.session?.user?.email || "";
     state.view = "auth";
-    state.authError = "Profil introuvable pour "+email+". Exécute PROFILE_FIX.sql dans Supabase (SQL Editor), puis reconnecte-toi.";
+    const detail = state._profileLastError ? (" Détail: "+state._profileLastError) : "";
+    state.authError = "Profil introuvable pour "+email+". Exécute PROFILE_FIX.sql dans Supabase (SQL Editor), puis reconnecte-toi."+detail;
     // Ne pas forcément déconnecter : laisse la session pour retry après SQL
     render();
     return;
@@ -1130,6 +1146,15 @@ async function loadClientPressingOnly(pressingId){
     const slots = (allSlots||[]).filter(s => (s.kind||'pickup') === 'pickup');
     const deliverySlots = (allSlots||[]).filter(s => s.kind === 'delivery');
     state.clientConfig = { pressing, zones: zones||[], services: services||[], slots, deliverySlots };
+    resetBooking();
+    // S'assurer que le client est bien dans le réseau du pressing
+    try{ await enrollInNetwork(pressingId); }catch(e){}
+    if(state.profile && !state.profile.home_pressing_id){
+      try{
+        await sb.from("profiles").update({ home_pressing_id: pressingId }).eq("id", state.profile.id);
+        state.profile.home_pressing_id = pressingId;
+      }catch(e){}
+    }
     await loadClientCampaigns(pressingId);
     await loadFeaturedReviews(pressingId);
   } catch(e){ console.warn("loadClientPressingOnly:", e.message); }
@@ -1139,13 +1164,15 @@ async function loadClientOrders(){
   state.orders = data || [];
 }
 async function enrollInNetwork(pressingId){
+  if(!pressingId || !state.profile?.id) return false;
   try{
     const { error } = await sb.from("pressing_customers").upsert(
       { pressing_id: pressingId, customer_id: state.profile.id, joined_at: new Date().toISOString() },
       { onConflict: "pressing_id,customer_id" }
     );
-    if(error) console.warn("enrollInNetwork:", error.message);
-  } catch(e){ console.warn("enrollInNetwork:", e.message); }
+    if(error){ console.warn("enrollInNetwork:", error.message); return false; }
+    return true;
+  } catch(e){ console.warn("enrollInNetwork:", e.message); return false; }
 }
 async function loadPressingClients(){
   if(!state.myPressing?.id){ state.pressingClients = []; state.pressingClientsError = null; return; }
@@ -1311,7 +1338,13 @@ function renderClientProfileCard(){
 }
 
 async function clientGo(screen){
-  if(screen === "book" && !state.selectedPressingId){ setState({ clientScreen:"choosePressing" }); return; }
+  if(screen === "book" && !state.selectedPressingId){ setState({ clientScreen:"joinPressing" }); return; }
+  if(screen === "book"){
+    if(!state.clientConfig && state.selectedPressingId){
+      await loadClientPressingOnly(state.selectedPressingId);
+    }
+    if(!state.booking || !state.booking.items) resetBooking();
+  }
   state.clientScreen = screen; render();
   if(screen === "home" && state.selectedPressingId){ await loadClientCampaigns(state.selectedPressingId); render(); }
   if(screen === "track" || screen === "history"){ await loadClientOrders(); render(); }
@@ -1399,23 +1432,72 @@ function renderCampaignsForClient(){
 }
 async function confirmCampaignSlot(campaignId, slotId, mode, date){
   try{
+    const prof = await ensureProfileRow();
+    if(!prof?.id) throw new Error("Profil introuvable. Déconnecte-toi et reconnecte-toi.");
+    state.profile = prof;
+    if(state.selectedPressingId) await enrollInNetwork(state.selectedPressingId);
+    if(!clientHasActivePass(state.profile)){
+      alert("Plus de crédits Pass. Recharge ton Pass pour confirmer.");
+      clientGo("pass");
+      return;
+    }
     const { data: order, error } = await sb.from("orders").insert({
-      customer_id: state.profile.id, pressing_id: state.selectedPressingId, pickup_mode: mode, pickup_date: date,
-      notes: "Confirmation collecte groupée", estimated_amount: 0
+      customer_id: prof.id,
+      pressing_id: state.selectedPressingId,
+      pickup_mode: mode || "domicile",
+      pickup_date: date || todayISO(),
+      notes: "Confirmation collecte groupée",
+      estimated_amount: 0,
+      order_status: "collecte_programmee"
     }).select().single();
     if(error) throw error;
-    await sb.from("campaign_responses").upsert({ campaign_id: campaignId, slot_id: slotId, customer_id: state.profile.id, order_id: order.id, status:"confirmed" }, { onConflict:"campaign_id,customer_id" });
+    try{
+      await sb.from("campaign_responses").upsert({
+        campaign_id: campaignId,
+        slot_id: slotId,
+        customer_id: prof.id,
+        order_id: order.id,
+        status: "confirmed"
+      }, { onConflict: "campaign_id,customer_id" });
+    } catch(e){ console.warn("campaign_responses:", e.message); }
+    try{ await deductPassCredit(); }catch(e){}
+    state.confirmedCampaigns = state.confirmedCampaigns || {};
     state.confirmedCampaigns[campaignId] = slotId;
     await loadClientOrders();
+    alert("Créneau confirmé. Le pressing a reçu ta demande.");
     render();
-  } catch(e){ alert("Erreur : " + e.message); }
+  } catch(e){ alert("Erreur : " + (e.message || e)); }
 }
 
+function resetBooking(){
+  const cfg = state.clientConfig || {};
+  const zones = cfg.zones || [];
+  const slots = cfg.slots || [];
+  state.booking = {
+    step: 0,
+    mode: "domicile",
+    zoneId: (zones[0] && zones[0].id) || "",
+    address: state.profile?.home_address || "",
+    landmark: "",
+    date: "",
+    slotId: (slots[0] && slots[0].id) || "",
+    deliverySlotId: "",
+    items: {},
+    quantity: "6–10",
+    exactQuantity: "",
+    recurring: false
+  };
+  state.bookingError = null;
+  state.bookingSubmitting = false;
+}
 function renderBookingFlow(){
-  const cfg = state.clientConfig; const b = state.booking;
-  if(!cfg) return `<div class="screen"><div class="empty">Choisis d'abord un pressing.</div></div>`;
-  const zoneObj = cfg.zones.find(z => z.id === b.zoneId) || cfg.zones[0] || { pickup_fee:0, delivery_fee:0 };
-  const itemsTotal = Object.entries(b.items).reduce((s,[svcId,qty]) => {
+  const cfg = state.clientConfig;
+  if(!cfg) return `<div class="screen"><div class="empty">Rejoins d'abord ton pressing avec le code.</div>
+    <button class="btn btn-primary" onclick="clientGo('joinPressing')">Entrer le code pressing</button></div>`;
+  if(!state.booking || !state.booking.items) resetBooking();
+  const b = state.booking;
+  const zoneObj = (cfg.zones||[]).find(z => z.id === b.zoneId) || (cfg.zones||[])[0] || { pickup_fee:0, delivery_fee:0 };
+  const itemsTotal = Object.entries(b.items || {}).reduce((s,[svcId,qty]) => {
     const svc = cfg.services.find(x => x.id === svcId);
     return s + (svc ? svc.price*qty : 0);
   }, 0);
@@ -1506,6 +1588,7 @@ function renderBookingFlow(){
 }
 function setBookingField(k,v){ state.booking[k]=v; render(); }
 function setItemQty(svcId, delta){
+  if(!state.booking || !state.booking.items) resetBooking();
   const cur = state.booking.items[svcId] || 0;
   const next = Math.max(0, cur + delta);
   if(next === 0) delete state.booking.items[svcId]; else state.booking.items[svcId] = next;
@@ -1514,8 +1597,18 @@ function setItemQty(svcId, delta){
 function bookingStep(n){ state.booking.step = n; render(); }
 async function bookingConfirm(){
   setState({ bookingSubmitting:true, bookingError:null });
+  if(!state.booking || !state.booking.items) resetBooking();
   const b = state.booking; const cfg = state.clientConfig;
   try{
+    // Garantir que le profil existe en base (évite FK orders_customer_id_fkey)
+    const prof = await ensureProfileRow();
+    if(!prof || !prof.id){
+      throw new Error("Profil client introuvable en base. Déconnecte-toi, exécute PROFILE_FIX.sql, puis reconnecte-toi.");
+    }
+    state.profile = prof;
+    const customerId = prof.id;
+    if(state.selectedPressingId) await enrollInNetwork(state.selectedPressingId);
+
     // Vérification Pass Rechargement
     if(!clientHasActivePass(state.profile)){
       setState({ bookingSubmitting:false, bookingError:null, clientScreen:"pass", passRequestError:"Tu n'as plus de crédits. Recharge ton Pass pour réserver." });
@@ -1523,19 +1616,20 @@ async function bookingConfirm(){
     }
     let pickupAddressId = null;
     if(b.mode === "domicile"){
-      const zone = cfg.zones.find(z => z.id === b.zoneId);
-      const { data: addr, error: addrErr } = await sb.from("addresses").insert({
-        customer_id: state.profile.id, label:"Domicile", zone_id: b.zoneId || null, quartier: zone?.name, landmark:b.landmark, details:b.address, phone:state.profile.phone
-      }).select().single();
-      if(addrErr) throw addrErr;
-      pickupAddressId = addr.id;
+      const zone = (cfg.zones||[]).find(z => z.id === b.zoneId);
+      try{
+        const { data: addr, error: addrErr } = await sb.from("addresses").insert({
+          customer_id: customerId, label:"Domicile", zone_id: b.zoneId || null, quartier: zone?.name, landmark:b.landmark, details:b.address, phone:state.profile.phone
+        }).select().single();
+        if(!addrErr && addr) pickupAddressId = addr.id;
+      } catch(e){ console.warn("address:", e.message); }
     }
-    const itemsTotal = Object.entries(b.items).reduce((s,[svcId,qty]) => {
-      const svc = cfg.services.find(x => x.id === svcId);
+    const itemsTotal = Object.entries(b.items || {}).reduce((s,[svcId,qty]) => {
+      const svc = (cfg.services||[]).find(x => x.id === svcId);
       return s + (svc ? svc.price*qty : 0);
     }, 0);
     const { data: order, error: orderErr } = await sb.from("orders").insert({
-      customer_id: state.profile.id, pressing_id: state.selectedPressingId, pickup_mode: b.mode, pickup_address_id: pickupAddressId,
+      customer_id: customerId, pressing_id: state.selectedPressingId, pickup_mode: b.mode, pickup_address_id: pickupAddressId,
       pickup_date: b.date || todayISO(), pickup_slot_id: b.slotId || null, delivery_slot_id: b.deliverySlotId || null, quantity_estimate: b.quantity,
       quantity_count: b.exactQuantity ? parseInt(b.exactQuantity,10) : null,
       estimated_amount: (itemsTotal || 3500)
@@ -2327,7 +2421,7 @@ function renderPressingConfig(){
 
     <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents de collecte</div>
       <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="refreshPressingAgents()">🔄</button></div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Les agents sont créés <b>uniquement par vous</b> ici — ils n'apparaissent plus à l'inscription publique.</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Les agents sont créés <b>uniquement par vous</b> ici. Après création, l'agent se connecte sur le <b>même site</b> avec l'e-mail et le mot de passe que vous lui donnez — son écran affiche les missions de collecte / livraison.</p>
     <div class="card" style="margin-bottom:12px;border:1px solid var(--brand);">
       <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Ajouter un agent</div>
       <div class="field" style="margin:0 0 8px;"><div class="field-label">Nom</div><input type="text" id="newAgentName" placeholder="Nom de l'agent" /></div>
@@ -2492,41 +2586,54 @@ function removeSlotRow(i){ state.draftCampaign.slots.splice(i,1); render(); }
 async function publishCampaign(){
   const pid = myPressingId();
   if(!pid){ alert("Pressing introuvable."); return; }
-  // Lire le formulaire directement (fiable sur mobile)
+  if(state._publishingCampaign) return;
   const title = (document.getElementById("campTitle")?.value || state.draftCampaign?.title || "").trim();
   const message = (document.getElementById("campMessage")?.value || state.draftCampaign?.message || "").trim();
-  const campaign_date = (document.getElementById("campDate")?.value || state.draftCampaign?.campaign_date || "").trim();
+  let campaign_date = (document.getElementById("campDate")?.value || state.draftCampaign?.campaign_date || "").trim();
+  // Normaliser date FR jj/mm/aaaa → aaaa-mm-jj
+  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(campaign_date)){
+    const [dd,mm,yy] = campaign_date.split("/");
+    campaign_date = yy + "-" + mm.padStart(2,"0") + "-" + dd.padStart(2,"0");
+  }
   const mode = state.draftCampaign?.mode || "domicile";
   if(!title || !campaign_date){ alert("Titre et date requis."); return; }
   const slots = [];
-  const n = (state.draftCampaign?.slots || []).length || 1;
+  const n = Math.max((state.draftCampaign?.slots || []).length, 1);
   for(let i=0;i<n;i++){
     const zone = (document.getElementById("campZone"+i)?.value || state.draftCampaign?.slots?.[i]?.zone_label || "").trim();
     const start = (document.getElementById("campStart"+i)?.value || state.draftCampaign?.slots?.[i]?.start_time || "07:00").trim();
     const end = (document.getElementById("campEnd"+i)?.value || state.draftCampaign?.slots?.[i]?.end_time || "09:00").trim();
-    if(zone) slots.push({ zone_label: zone, start_time: start, end_time: end });
+    if(zone) slots.push({ zone_label: zone, start_time: start.length===5?start+":00":start, end_time: end.length===5?end+":00":end });
   }
+  state._publishingCampaign = true;
   try{
-    const { data: camp, error } = await sb.from("campaigns").insert({
+    const payload = {
       pressing_id: pid,
       created_by: state.profile.id,
       title, message, campaign_date, mode, status: "published"
-    }).select("id").single();
+    };
+    const { data: camp, error } = await sb.from("campaigns").insert(payload).select("id").single();
     if(error) throw error;
     if(slots.length && camp?.id){
       const { error: e2 } = await sb.from("campaign_slots").insert(
         slots.map(s => ({ campaign_id: camp.id, zone_label: s.zone_label, start_time: s.start_time, end_time: s.end_time }))
       );
-      if(e2) console.warn("campaign_slots:", e2.message);
+      if(e2) throw e2;
     }
     await loadPressingCampaigns();
-    setState({ campaignsView: "list" });
+    state._publishingCampaign = false;
+    state.campaignsView = "list";
+    render();
+    alert("Campagne publiée.");
   } catch(e){
+    state._publishingCampaign = false;
     const msg = e.message || String(e);
-    if(/timeout|Failed to fetch|network/i.test(msg)){
-      alert("Réseau lent ou base saturée. Réessayez dans quelques secondes. Si ça continue : exécutez FIX_RLS_PERFORMANCE.sql.");
+    if(/permission|policy|RLS|row-level/i.test(msg)){
+      alert("Droit refusé (RLS). Exécute CAMPAIGNS_SQL.sql dans Supabase, puis réessaie.\n"+msg);
+    } else if(/timeout|Failed to fetch|network/i.test(msg)){
+      alert("Réseau lent. Réessaie dans quelques secondes.");
     } else {
-      alert("Erreur : " + msg);
+      alert("Erreur publication : " + msg);
     }
   }
 }
