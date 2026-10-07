@@ -613,13 +613,19 @@ async function ensureProfileRow(){
   let role = meta.role || "client";
   if(!["client","pressing","agent","admin"].includes(role)) role = "client";
 
-  // 1) RPC SECURITY DEFINER (contourne RLS si installée)
+  // 1) RPC SECURITY DEFINER (avec timeout 8s pour ne pas bloquer)
   try{
-    const { data: rpcData, error: rpcErr } = await sb.rpc("ensure_my_profile", {
+    const rpcCall = sb.rpc("ensure_my_profile", {
       p_full_name: full_name,
       p_phone: phone,
       p_role: role
     });
+    const rpcRes = await Promise.race([
+      rpcCall,
+      new Promise((resolve) => setTimeout(() => resolve({ data:null, error:{ message:"rpc timeout" } }), 8000))
+    ]);
+    const rpcData = rpcRes?.data;
+    const rpcErr = rpcRes?.error;
     if(!rpcErr && rpcData){
       if(Array.isArray(rpcData) && rpcData[0]) return rpcData[0];
       if(rpcData.id) return rpcData;
@@ -657,8 +663,9 @@ async function loadProfileAndRoute(retry){
     console.warn("loadProfileAndRoute:", e);
   }
   if(!data){
-    if(attempt < 3){
-      setTimeout(() => loadProfileAndRoute(attempt + 1), 600 + attempt * 400);
+    if(attempt < 2){
+      setState({ authLoading:false, authError: null });
+      setTimeout(() => loadProfileAndRoute(attempt + 1), 500 + attempt * 300);
       return;
     }
     const email = state.session?.user?.email || "";
@@ -677,11 +684,13 @@ async function loadProfileAndRoute(retry){
     if(jc){ fresh.joinCode = jc; }
   } catch(e){}
   state = fresh;
+  // Afficher l'app tout de suite (évite "Connexion..." infini)
+  render();
 
   if(data.role === "client"){
-    state.profile = await ensureClientPass(data);
-    await loadPassSettings();
-    await loadClientOrders();
+    try{ state.profile = await ensureClientPass(data); }catch(e){}
+    try{ await loadPassSettings(); }catch(e){}
+    try{ await loadClientOrders(); }catch(e){}
     // Rattachement étanche : home_pressing_id, code URL, ou pressing_customers
     let homeId = state.profile.home_pressing_id || null;
     if(!homeId && state.joinCode){
@@ -708,22 +717,21 @@ async function loadProfileAndRoute(retry){
       state.pressingsList = [];
     }
   } else if(data.role === "pressing"){
-    await loadMyPressing();
+    try{ await loadMyPressing(); }catch(e){ console.warn(e); }
     if(!state.myPressing){
-      // Auto-création du réseau pressing + essai 30j si le compte existe mais pas encore de fiche
-      await ensurePressingForOwner(data);
-      await loadMyPressing();
+      try{ await ensurePressingForOwner(data); }catch(e){ console.warn("ensurePressing:", e.message||e); }
+      try{ await loadMyPressing(); }catch(e){}
     }
     if(state.myPressing){
       if(!state.myPressing.invite_code){ try{ await ensurePressingInviteCode(); }catch(e){} }
-      await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]);
-      attachPressingRealtime();
+      try{ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]); }catch(e){}
+      try{ attachPressingRealtime(); }catch(e){}
     }
   } else if(data.role === "agent"){
-    await loadMyAgent();
-    if(state.myAgent) await loadMissions(); else await loadJoinablePressings();
+    try{ await loadMyAgent(); }catch(e){}
+    try{ if(state.myAgent) await loadMissions(); else await loadJoinablePressings(); }catch(e){}
   } else if(data.role === "admin"){
-    await Promise.all([loadAdminPressings(), loadAdminPassRequests(), loadPassSettings()]);
+    try{ await Promise.all([loadAdminPressings(), loadAdminPassRequests(), loadPassSettings()]); }catch(e){}
   }
   // Nettoyage auto 30j (client / pressing / agent)
   try{ await runRoleAutoCleanup(); }catch(e){ console.warn(e); }
@@ -749,11 +757,25 @@ function goAuthScreen(s){ setState({ authScreen:s, authError:null, authInfo:null
 async function loadSignupPressings(){ state.signupPressings = []; render(); }
 
 async function doLogin(email, password){
+  if(!email || !password){ setState({ authError: "Email et mot de passe requis." }); return; }
   setState({ authLoading:true, authError:null });
-  const { error } = await sb.auth.signInWithPassword({ email, password });
-  state.authLoading = false;
-  if(error){ setState({ authError: error.message }); return; }
-  await loadProfileAndRoute();
+  const watchdog = setTimeout(() => {
+    if(state.authLoading){
+      setState({ authLoading:false, authError: "Connexion trop longue (réseau). Réessaie dans quelques secondes." });
+    }
+  }, 22000);
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    clearTimeout(watchdog);
+    if(error){ setState({ authLoading:false, authError: error.message || "Identifiants incorrects" }); return; }
+    state.session = data?.session || null;
+    state.authLoading = false;
+    render(); // quitte immédiatement "Connexion..."
+    await loadProfileAndRoute();
+  } catch(e){
+    clearTimeout(watchdog);
+    setState({ authLoading:false, authError: (e && e.message) || "Erreur réseau" });
+  }
 }
 async function doSignup(payload){
   setState({ authLoading:true, authError:null, authInfo:null });
