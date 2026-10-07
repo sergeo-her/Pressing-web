@@ -1878,7 +1878,7 @@ async function ensurePressingForOwner(profile){
   }).select("*").single();
   if(error || !pressing){
     console.error("Création pressing échouée:", error);
-    return null;
+    throw new Error(error?.message || "Insertion pressing refusée (RLS). Lance SCHEMA_FK_FIX.sql.");
   }
   const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
   await sb.from("subscriptions").insert({
@@ -1893,14 +1893,22 @@ async function loadMyPressing(){
   state.myPressing = data;
 }
 async function manualCreateMyPressing(){
-  if(!state.profile) return;
-  await ensurePressingForOwner(state.profile);
-  await loadMyPressing();
-  if(state.myPressing){
+  if(!state.profile){ alert("Session expirée. Reconnecte-toi."); return; }
+  try{
+    const created = await ensurePressingForOwner(state.profile);
+    await loadMyPressing();
+    if(!state.myPressing){
+      alert("Impossible de créer le pressing. Exécute SCHEMA_FK_FIX.sql dans Supabase (droits pressings), puis réessaie.\n" + (created ? "" : "Création refusée par la base."));
+      return;
+    }
+    try{ await ensurePressingInviteCode(); }catch(e){}
     await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]);
     attachPressingRealtime();
+    render();
+    alert("Pressing créé. Essai 30 jours activé.");
+  } catch(e){
+    alert("Erreur création pressing : " + (e.message || e));
   }
-  render();
 }
 async function loadPressingOrders(){
   if(!state.myPressing?.id){ state.pressingOrders = []; return; }
