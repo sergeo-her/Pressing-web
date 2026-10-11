@@ -188,18 +188,30 @@ let sb = null;
 let notifPollTimer = null;
 
 const STATUS_FLOW = [
-  "demande_recue","collecte_programmee","agent_en_route_collecte",
-  "vetements_recuperes","receptionne_pressing","en_traitement",
-  "pret","livraison_programmee","agent_en_route_livraison","livre","termine"
+  "demande_recue","collecte_programmee","en_traitement","pret","livre","termine"
 ];
 const STATUS_LABELS = {
-  demande_recue:"Demande reçue", collecte_programmee:"Collecte programmée",
-  agent_en_route_collecte:"Agent en route (collecte)", vetements_recuperes:"Vêtements récupérés",
-  receptionne_pressing:"Réceptionnés par le pressing", en_traitement:"En traitement",
-  pret:"Prêt", livraison_programmee:"Livraison programmée",
-  agent_en_route_livraison:"Agent en route (livraison)", livre:"Livré",
-  termine:"Terminée", annule:"Annulée"
+  demande_recue:"Demande reçue",
+  collecte_programmee:"Collecte programmée",
+  en_traitement:"En traitement",
+  pret:"Prêt pour livraison",
+  livre:"Livré",
+  termine:"Terminée",
+  annule:"Annulée",
+  agent_en_route_collecte:"Collecte programmée",
+  vetements_recuperes:"En traitement",
+  receptionne_pressing:"En traitement",
+  livraison_programmee:"Prêt pour livraison",
+  agent_en_route_livraison:"Livré"
 };
+const STATUS_ALIASES = {
+  agent_en_route_collecte:"collecte_programmee",
+  vetements_recuperes:"en_traitement",
+  receptionne_pressing:"en_traitement",
+  livraison_programmee:"pret",
+  agent_en_route_livraison:"livre"
+};
+function normalizeStatus(s){ return STATUS_ALIASES[s] || s; }
 // Abonnements pressing — modifiables admin (platform_settings key: pressing_plans)
 const PLAN_DEFAULTS = {
   mensuel:     { id:"mensuel",     label:"Mensuel",     price:2500,  days:30,  note:"" },
@@ -320,7 +332,7 @@ async function linkClientToPressing(pressingId){
 
 
 function fcfa(n){ return (n||0).toLocaleString("fr-FR") + " FCFA"; }
-function nextStatus(cur){ const i = STATUS_FLOW.indexOf(cur); return (i===-1||i===STATUS_FLOW.length-1) ? cur : STATUS_FLOW[i+1]; }
+function nextStatus(cur){ const n = normalizeStatus(cur); const i = STATUS_FLOW.indexOf(n); return (i===-1||i===STATUS_FLOW.length-1) ? n : STATUS_FLOW[i+1]; }
 function esc(s){ return String(s==null?"":s).replace(/"/g,"&quot;"); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function myPressingId(){ return state.profile?.role==='pressing' ? state.myPressing?.id : state.myAgent?.pressing_id; }
@@ -676,15 +688,12 @@ async function loadProfileAndRoute(retry){
     render();
     return;
   }
-  const fresh = freshState();
-  fresh.session = state.session; fresh.profile = data; fresh.view = "app";
-  // Conserver join code si présent
-  try{
-    const jc = localStorage.getItem("pc_join_code");
-    if(jc){ fresh.joinCode = jc; }
-  } catch(e){}
-  state = fresh;
-  // Afficher l'app tout de suite (évite "Connexion..." infini)
+  // Conserver session / profil pendant le chargement (écran "Ouverture…")
+  const keepJoin = (function(){ try{ return localStorage.getItem("pc_join_code"); }catch(e){ return null; } })();
+  state.session = state.session;
+  state.profile = data;
+  state.view = "loading";
+  if(keepJoin) state.joinCode = keepJoin;
   render();
 
   if(data.role === "client"){
@@ -735,11 +744,11 @@ async function loadProfileAndRoute(retry){
   }
   // Nettoyage auto 30j (client / pressing / agent)
   try{ await runRoleAutoCleanup(); }catch(e){ console.warn(e); }
-  await loadNotifications();
+  try{ await loadNotifications(); }catch(e){}
   if(notifPollTimer) clearInterval(notifPollTimer);
   notifPollTimer = setInterval(loadNotifications, 60000);
+  state.view = "app";
   render();
-  // Push en différé (ne bloque pas l'affichage)
   setTimeout(() => { try{ ensurePushSubscription(); }catch(e){} }, 2500);
 }
 
@@ -770,7 +779,8 @@ async function doLogin(email, password){
     if(error){ setState({ authLoading:false, authError: error.message || "Identifiants incorrects" }); return; }
     state.session = data?.session || null;
     state.authLoading = false;
-    render(); // quitte immédiatement "Connexion..."
+    state.view = "loading";
+    render();
     await loadProfileAndRoute();
   } catch(e){
     clearTimeout(watchdog);
@@ -971,7 +981,7 @@ async function submitSignup(){
 
 // =============================== RACINE ===============================
 function renderRoot(){
-  if(state.view === "loading") return `<div class="center-msg">Chargement...</div>`;
+  if(state.view === "loading") return `<div class="center-msg"><div style="font-size:28px;margin-bottom:12px;">👔</div><div style="font-weight:700;font-size:16px;">Ouverture de ton espace…</div><div style="font-size:13px;color:var(--muted);margin-top:6px;">Un instant</div></div>`;
   if(state.view === "auth") return renderAuth();
   if(!state.profile) return `<div class="center-msg">Session…<br/><button class="btn btn-secondary" style="margin-top:12px;max-width:200px;" onclick="location.reload()">Recharger</button></div>`;
   const role = state.profile.role;
@@ -1149,7 +1159,7 @@ async function loadClientPressingOnly(pressingId){
   if(!pressingId) return;
   try{
     let pressing = null;
-    const { data, error } = await sb.from("pressings").select("id,name,phone,whatsapp,address,invite_code").eq("id", pressingId).maybeSingle();
+    const { data, error } = await sb.from("pressings").select("id,name,phone,whatsapp,address,invite_code,logo_url,owner_profile_id").eq("id", pressingId).maybeSingle();
     if(!error && data) pressing = data;
     if(!pressing){
       // Repli via RPC
@@ -1383,8 +1393,9 @@ function renderClientHome(){
     <h1>Votre pressing<br/>vient à vous.</h1>
     <div class="decor-icons" aria-hidden="true"><span>🧺</span><span>👕</span><span>👔</span><span>✨</span></div>
     <p>Nous récupérons vos vêtements chez vous, les confions au pressing et vous les rapportons une fois prêts.</p>
-    <button class="btn btn-amber" onclick="clientGo('book')">Faire récupérer mes vêtements</button>
-    <div style="font-size:12px;opacity:.9;margin-top:8px;">Propulsé par Pressing Connecté</div>
+    <button class="btn btn-amber" onclick="clientGo('book')">Faire une demande personnalisée</button>
+    <div style="font-size:12px;opacity:.95;margin-top:8px;">Demande libre — date et adresse à ton choix</div>
+    <div style="font-size:11px;opacity:.75;margin-top:6px;">Propulsé par Pressing Connecté</div>
   </div>
   <div class="screen" style="padding-bottom:0;">
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-bottom:4px;" onclick="clientGo('pass')">
@@ -1439,17 +1450,29 @@ async function submitReview(){
 function renderCampaignsForClient(){
   if(!state.clientCampaigns || state.clientCampaigns.length===0) return "";
   return `<div class="screen" style="padding-top:16px;padding-bottom:0;">
-    <div style="font-size:14px;font-weight:700;margin-bottom:8px;">📢 Ramassages programmés</div>
-    ${state.clientCampaigns.map(c => `<div class="card">
-      <div style="font-weight:700;font-size:14px;">${esc(c.title)}</div>
-      <div style="font-size:12px;color:var(--muted);margin:2px 0 8px;">${c.campaign_date} · ${c.mode==='domicile'?'À domicile':'Point de rendez-vous'}</div>
-      ${c.message ? `<div style="font-size:13px;margin-bottom:8px;">${esc(c.message)}</div>` : ""}
-      <div class="chip-row">
-        ${(c.campaign_slots||[]).map(s => `<button class="chip ${state.confirmedCampaigns[c.id]===s.id?'active':''}" onclick="confirmCampaignSlot('${c.id}','${s.id}','${c.mode}','${c.campaign_date}')">
-          ${esc(s.zone_label)} · ${s.start_time.slice(0,5)}${state.confirmedCampaigns[c.id]===s.id?' ✓':''}
-        </button>`).join("")}
-      </div>
-    </div>`).join("")}
+    <div style="border:2px solid #0D9F4F;border-radius:16px;padding:14px;background:linear-gradient(180deg,#E8F8EF 0%,#fff 48%);margin-bottom:8px;">
+      <div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#0A7A3C;margin-bottom:4px;">Proposé par ton pressing</div>
+      <div style="font-size:16px;font-weight:800;color:var(--ink);margin-bottom:4px;">📢 Collectes & livraisons programmées</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.45;">Créneaux organisés par le pressing (quartier + heure). Distinct de ta demande personnalisée ci-dessus.</p>
+      ${state.clientCampaigns.map(c => {
+        const isDelivery = /livraison/i.test(c.title||"") || c.mode === "livraison";
+        const modeLabel = isDelivery ? "Livraison" : (c.mode==="domicile" ? "Collecte à domicile" : "Collecte — point RDV");
+        return `<div class="card" style="border-color:#86efac;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="font-weight:700;font-size:14px;">${esc(c.title)}</div>
+            <span style="font-size:10px;font-weight:800;background:#0D9F4F;color:#fff;padding:3px 8px;border-radius:999px;white-space:nowrap;">${modeLabel}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin:4px 0 8px;">📅 ${c.campaign_date}</div>
+          ${c.message ? `<div style="font-size:13px;margin-bottom:8px;">${esc(c.message)}</div>` : ""}
+          <div style="font-size:11px;font-weight:700;color:#0A7A3C;margin-bottom:6px;">Créneaux — touche pour confirmer</div>
+          <div class="chip-row">
+            ${(c.campaign_slots||[]).map(s => `<button class="chip ${state.confirmedCampaigns[c.id]===s.id?'active':''}" onclick="confirmCampaignSlot('${c.id}','${s.id}','${c.mode}','${c.campaign_date}')">
+              ${esc(s.zone_label)} · ${String(s.start_time||"").slice(0,5)}${state.confirmedCampaigns[c.id]===s.id?' ✓':''}
+            </button>`).join("")}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>
   </div>`;
 }
 async function confirmCampaignSlot(campaignId, slotId, mode, date){
@@ -1700,10 +1723,16 @@ function renderTracking(){
         <div style="font-size:12px;color:var(--muted);">${esc(o.pressings?.name||'')} · ${STATUS_LABELS[o.order_status]}</div>
       </div>`).join("")}</div>`;
   }
-  const idx = STATUS_FLOW.indexOf(order.order_status);
+  const st = normalizeStatus(order.order_status);
+  const idx = STATUS_FLOW.indexOf(st);
+  const isCampaign = /groupée|campagne|collecte group/i.test(order.notes||"");
   return `<div class="screen">
     ${state.orders.length > 1 ? `<button class="btn btn-secondary" style="margin-bottom:12px;" onclick="pickOrder(null)">← Toutes mes commandes</button>` : ""}
-    <div style="margin-bottom:20px;"><div style="font-size:12px;color:var(--mutedLight);">Commande · ${esc(order.pressings?.name||'')}</div><div style="font-size:19px;font-family:'Playfair Display',Georgia,serif;">${order.order_number}</div></div>
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;color:var(--mutedLight);">Commande · ${esc(order.pressings?.name||'')}</div>
+      <div style="font-size:19px;font-family:'Playfair Display',Georgia,serif;">${order.order_number}</div>
+      ${isCampaign ? `<div style="display:inline-block;margin-top:8px;font-size:11px;font-weight:800;background:#E8F8EF;color:#0A7A3C;border:1px solid #86efac;padding:4px 10px;border-radius:999px;">📢 Collecte programmée par le pressing</div>` : `<div style="display:inline-block;margin-top:8px;font-size:11px;font-weight:800;background:#FFF7ED;color:#9a3412;border:1px solid #fdba74;padding:4px 10px;border-radius:999px;">🧾 Demande personnalisée</div>`}
+    </div>
     ${STATUS_FLOW.map((s,i) => {
       const done = i<=idx, current = i===idx;
       return `<div style="display:flex;gap:10px;">
@@ -1720,12 +1749,16 @@ function pickOrder(id){ setState({ activeOrderId: id }); }
 function renderHistory(){
   return `<div class="screen"><div class="header-title" style="margin-bottom:12px;">Historique</div>
     ${state.orders.length===0 ? `<div class="empty">Aucune commande passée.</div>` :
-      state.orders.map(o => `<div class="card">
+      state.orders.map(o => {
+        const camp = /groupée|campagne|collecte group/i.test(o.notes||"");
+        return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-size:14px;font-weight:700;">${o.order_number}</div><span class="badge">${STATUS_LABELS[o.order_status]}</span>
+          <div style="font-size:14px;font-weight:700;">${o.order_number}</div><span class="badge">${STATUS_LABELS[normalizeStatus(o.order_status)]||STATUS_LABELS[o.order_status]||o.order_status}</span>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px;">${esc(o.pressings?.name||'')} · ${fcfa(o.final_amount || o.estimated_amount)}</div>
-      </div>`).join("")}
+        <div style="font-size:11px;font-weight:700;margin-top:4px;color:${camp?'#0A7A3C':'#9a3412'};">${camp?'📢 Collecte pressing':'🧾 Demande perso'}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(o.pressings?.name||'')} · ${fcfa(o.final_amount || o.estimated_amount)}</div>
+      </div>`;
+      }).join("")}
   </div>`;
 }
 
@@ -2325,7 +2358,13 @@ function downloadOrderInvoice(orderId){
   <div class="no-print" style="margin-bottom:16px;">
     <button onclick="window.print()" style="padding:10px 18px;background:#0D9F4F;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Imprimer / Enregistrer en PDF</button>
   </div>
-  <h1>FACTURE — Pressing Connecté</h1>
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+    ${pressing.logo_url ? `<img src="${pressing.logo_url}" alt="Logo" style="width:64px;height:64px;object-fit:contain;border-radius:10px;border:1px solid #e5e7eb;"/>` : ""}
+    <div>
+      <h1 style="margin:0;">FACTURE</h1>
+      <div style="font-size:14px;font-weight:700;color:#0A7A3C;">${esc(pressing.name||"Pressing Connecté")}</div>
+    </div>
+  </div>
   <div class="meta">Document de preuve · ${dateStr}</div>
   <div class="box">
     <div class="row">
@@ -2446,8 +2485,23 @@ function renderPressingConfig(){
   if(!state.draftSlot) state.draftSlot = { label:"", zone_label:"", landmark:"", start_time:"08:00", end_time:"10:00" };
   if(!state.draftDeliverySlot) state.draftDeliverySlot = { label:"", zone_label:"", landmark:"", start_time:"17:00", end_time:"19:00" };
   const ds = state.draftService;
+  const logo = state.myPressing?.logo_url || "";
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="closePressingConfig()">←</button><div class="header-title">Configuration</div></div></div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">🏷️ Logo du pressing</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Ce logo apparaît sur tes factures téléchargeables.</p>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="width:72px;height:72px;border-radius:14px;border:2px dashed var(--border);background:#f8fafc;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+          ${logo ? `<img src="${logo}" alt="Logo" style="width:100%;height:100%;object-fit:contain;"/>` : `<span style="font-size:28px;">👔</span>`}
+        </div>
+        <div style="flex:1;min-width:160px;">
+          <input type="file" accept="image/*" id="pressingLogoFile" style="font-size:13px;margin-bottom:8px;" onchange="savePressingLogoFromFile(this)" />
+          ${logo ? `<button class="btn btn-secondary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;" onclick="clearPressingLogo()">Retirer le logo</button>` : `<div style="font-size:11px;color:var(--mutedLight);">PNG ou JPG, max 900 Ko</div>`}
+        </div>
+      </div>
+    </div>
 
     <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents de collecte</div>
       <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="refreshPressingAgents()">🔄</button></div>
