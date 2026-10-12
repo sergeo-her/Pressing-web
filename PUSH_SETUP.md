@@ -1,35 +1,38 @@
-# Notifications push natives — Pressing Connecté
+# Notifications push — Pressing Connecté
 
-## 1. SQL (obligatoire)
-Exécuter `PUSH_SQL_MIGRATION.sql` dans Supabase → SQL Editor.
+## Pourquoi Web Push (pas Firebase) ?
+- Déjà intégré (VAPID + Service Worker + Edge Function)
+- Fonctionne hors navigateur sur Android (Chrome) et PWA installée
+- iPhone : uniquement si l'app est installée sur l'écran d'accueil (Safari)
 
-## 2. Clés VAPID
-La clé **publique** est déjà dans `index.html` (`VAPID_PUBLIC_KEY`).
+## 1. SQL
+Exécuter PUSH_SQL_MIGRATION.sql dans Supabase SQL Editor.
 
-Générer une paire si besoin :
-```bash
+## 2. Secrets VAPID (une fois)
+La clé publique est dans index.html (VAPID_PUBLIC_KEY).
+
+Sur un PC ou Termux avec Node :
+```
 npx web-push generate-vapid-keys
 ```
-Mettre la **privée** en secret Supabase :
-```bash
-supabase secrets set VAPID_PUBLIC_KEY="BCpk..." VAPID_PRIVATE_KEY="...." VAPID_SUBJECT="mailto:vous@email.com"
+
+Dans Supabase → Project Settings → Edge Functions → Secrets :
+- VAPID_PUBLIC_KEY = (clé publique)
+- VAPID_PRIVATE_KEY = (clé privée)
+- VAPID_SUBJECT = mailto:sergesmoudio14@gmail.com
+
+La clé publique dans index.html doit correspondre à VAPID_PUBLIC_KEY.
+
+## 3. Déployer l'Edge Function
 ```
-
-## 3. Edge Function `send-push`
-Code dans `supabase-edge-send-push/index.ts`.
-
-```bash
 supabase functions deploy send-push
 ```
+Ou via le dashboard Supabase : Edge Functions → create/deploy `send-push` avec le code de supabase-edge-send-push/index.ts
 
-Sans cette fonction, l’app enregistre quand même les abonnements et affiche les notifications **quand l’onglet est ouvert** (Notification API + polling). Les push **écran verrouillé / app fermée** nécessitent l’Edge Function.
+Sans cette fonction déployée + secrets, les notifs marchent seulement quand l'onglet est ouvert (Notification API locale).
 
 ## 4. Côté utilisateur
-1. Ouvrir le site (idéalement en PWA installée).
-2. Accepter le bandeau **Activer les notifications**.
-3. Sur iPhone : installer sur l’écran d’accueil (Safari) puis activer les notifs.
-
-## Événements qui déclenchent une push
-- Nouvelle commande → propriétaire du pressing
-- Demande de recharge Pass → admins
-- Avancement statut commande / collecte programmée → client
+1. Ouvrir le site (idéalement installé en PWA)
+2. Accepter le bandeau "Activer les notifications"
+3. Android : autoriser dans les réglages système si demandé
+4. iPhone : Partager → Sur l'écran d'accueil, puis activer les notifs

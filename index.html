@@ -2480,6 +2480,61 @@ function renderSlotForm(kind, draft){
     <button class="btn btn-primary" type="button" onclick="addSlotConfig('${kind}')" style="margin-top:10px;">Ajouter le créneau</button>
   </div>`;
 }
+
+async function savePressingLogoFromFile(input){
+  const file = input && input.files && input.files[0];
+  if(!file){ alert("Aucun fichier sélectionné."); return; }
+  if(!state.myPressing || !state.myPressing.id){ alert("Pressing introuvable."); return; }
+  if(file.size > 2*1024*1024){ alert("Image trop lourde (max 2 Mo)."); return; }
+  try{
+    // Compresser en JPEG ~400px pour passer en base (colonne TEXT)
+    const dataUrl = await new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        try{
+          const max = 400;
+          let w = img.width, h = img.height;
+          if(w > max || h > max){
+            if(w > h){ h = Math.round(h * max / w); w = max; }
+            else { w = Math.round(w * max / h); h = max; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          resolve(canvas.toDataURL("image/jpeg", 0.72));
+        } catch(e){ reject(e); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image illisible")); };
+      img.src = url;
+    });
+    const { data, error } = await sb.from("pressings")
+      .update({ logo_url: dataUrl })
+      .eq("id", state.myPressing.id)
+      .select("*")
+      .single();
+    if(error) throw error;
+    state.myPressing = data;
+    alert("Logo enregistré.");
+    render();
+  } catch(e){
+    const msg = (e && e.message) || String(e);
+    alert("Erreur logo : " + msg + "\\nSi la colonne manque, exécute dans Supabase :\\nALTER TABLE public.pressings ADD COLUMN IF NOT EXISTS logo_url TEXT;");
+  }
+}
+async function clearPressingLogo(){
+  if(!state.myPressing?.id) return;
+  if(!confirm("Retirer le logo ?")) return;
+  try{
+    const { data, error } = await sb.from("pressings").update({ logo_url: null }).eq("id", state.myPressing.id).select("*").single();
+    if(error) throw error;
+    state.myPressing = data;
+    render();
+  } catch(e){ alert(e.message || e); }
+}
+
 function renderPressingConfig(){
   if(!state.draftService) state.draftService = { name:"", unit:"vêtement", price:"" };
   if(!state.draftSlot) state.draftSlot = { label:"", zone_label:"", landmark:"", start_time:"08:00", end_time:"10:00" };
@@ -2726,12 +2781,21 @@ async function publishCampaign(){
 async function loadMyAgent(){ const { data } = await sb.from("agents").select("*, pressings(name)").eq("id", state.profile.id).maybeSingle(); state.myAgent = data; }
 async function loadMissions(){
   const [pu, de] = await Promise.all([
-    sb.from("pickup_requests").select("*, orders(*)").eq("agent_id", state.profile.id),
-    sb.from("delivery_requests").select("*, orders(*)").eq("agent_id", state.profile.id),
+    sb.from("pickup_requests").select("*, orders(*)").eq("agent_id", state.profile.id).order("created_at",{ascending:false}),
+    sb.from("delivery_requests").select("*, orders(*)").eq("agent_id", state.profile.id).order("created_at",{ascending:false}),
   ]);
-  const pickups = (pu.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"collecte" }));
-  const deliveries = (de.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"livraison" }));
-  const missions = [...pickups, ...deliveries].filter(o => !["termine","annule"].includes(o.order_status));
+  const pickups = (pu.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"collecte", _assignId: r.id }));
+  const deliveries = (de.data||[]).filter(r=>r.orders).map(r => ({ ...r.orders, missionType:"livraison", _assignId: r.id }));
+  // Dédoublonner : une carte par commande + type de mission
+  const seen = new Set();
+  const missions = [];
+  for(const o of [...pickups, ...deliveries]){
+    if(["termine","annule"].includes(normalizeStatus(o.order_status))) continue;
+    const key = o.id + "|" + o.missionType;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    missions.push(o);
+  }
   const custIds = [...new Set(missions.map(m => m.customer_id).filter(Boolean))];
   if(custIds.length){
     const { data: profs } = await sb.from("profiles").select("id,full_name,phone,home_address,work_address").in("id", custIds);
@@ -2755,7 +2819,8 @@ function renderAgentApp(){
             <div style="font-size:13px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div>
           ${o.customer?.phone ? `<a href="tel:${o.customer.phone}" class="btn btn-secondary" style="width:auto;padding:7px 12px;margin:0;font-size:12px;">☎ Appeler</a>` : ""}
         </div>
-        <button class="btn btn-primary" style="margin-top:8px;" onclick="agentProgress('${o.id}')">${STATUS_LABELS[nextStatus(o.order_status)]}</button>
+        <div style="font-size:12px;color:var(--muted);margin:6px 0 4px;">Étape : ${STATUS_LABELS[normalizeStatus(o.order_status)]||o.order_status}</div>
+        <button class="btn btn-primary" style="margin-top:4px;" onclick="agentProgress('${o.id}')">${agentActionLabel(o)}</button>
       </div>`; }).join("")}
   </div>`;
 }
@@ -2782,12 +2847,62 @@ async function joinAsAgent(pressingId){
   if(state.myAgent) await loadMissions();
   render();
 }
+function agentNextStatus(order){
+  // Progression adaptée au type de mission
+  const cur = normalizeStatus(order.order_status);
+  if(order.missionType === "collecte"){
+    // Collecte : jusqu'à "en traitement" (linge récupéré / au pressing)
+    if(cur === "demande_recue" || cur === "collecte_programmee") return "en_traitement";
+    if(cur === "en_traitement") return "en_traitement"; // déjà fait
+    return nextStatus(cur);
+  }
+  // Livraison
+  if(cur === "pret" || cur === "en_traitement" || cur === "collecte_programmee") return "livre";
+  if(cur === "livre") return "termine";
+  return nextStatus(cur);
+}
+function agentActionLabel(order){
+  const n = agentNextStatus(order);
+  if(order.missionType === "collecte"){
+    if(normalizeStatus(order.order_status) === "en_traitement") return "Déjà récupéré";
+    return "Marquer récupéré";
+  }
+  if(n === "livre") return "Marquer livré";
+  if(n === "termine") return "Clôturer";
+  return STATUS_LABELS[n] || "Avancer";
+}
 async function agentProgress(orderId){
   const order = state.missions.find(o => o.id === orderId);
-  const status = nextStatus(order.order_status);
-  await sb.from("orders").update({ order_status: status, updated_at: new Date().toISOString() }).eq("id", orderId);
-  await sb.from("order_status_history").insert({ order_id:orderId, status, changed_by: state.profile.id });
-  await loadMissions(); render();
+  if(!order) return;
+  const status = agentNextStatus(order);
+  if(status === normalizeStatus(order.order_status) && order.missionType === "collecte"){
+    alert("Collecte déjà marquée récupérée.");
+    return;
+  }
+  try{
+    const { error } = await sb.from("orders").update({ order_status: status, updated_at: new Date().toISOString() }).eq("id", orderId);
+    if(error) throw error;
+    try{ await sb.from("order_status_history").insert({ order_id:orderId, status, changed_by: state.profile.id }); }catch(e){}
+    // Notifier client + propriétaire du pressing (sync)
+    try{
+      if(order.customer_id){
+        await notifyUser(order.customer_id, "Commande mise à jour",
+          (order.order_number||"")+" — "+(STATUS_LABELS[status]||status), "/");
+      }
+      const pid = order.pressing_id || state.myAgent?.pressing_id;
+      if(pid){
+        const { data: pr } = await sb.from("pressings").select("owner_profile_id").eq("id", pid).maybeSingle();
+        if(pr?.owner_profile_id){
+          await notifyUser(pr.owner_profile_id, "Agent — "+(order.missionType==="collecte"?"collecte":"livraison"),
+            (order.order_number||"")+" → "+(STATUS_LABELS[status]||status), "/");
+        }
+      }
+    } catch(e){ console.warn("agent notify:", e.message); }
+    await loadMissions();
+    render();
+  } catch(e){
+    alert("Erreur : " + (e.message||e));
+  }
 }
 
 // =============================== ADMIN ===============================
@@ -3811,12 +3926,21 @@ async function ensurePushSubscription(){
       return result;
     }
     if(Notification.permission === "denied"){
-      result.error = "Permission refusée.";
+      result.error = "Permission refusée dans les réglages du navigateur.";
       return result;
     }
     if(Notification.permission !== "granted"){
-      result.error = "Permission non accordée.";
-      return result;
+      // Demander la permission (nécessaire pour le push hors navigateur)
+      try{
+        const perm = await Notification.requestPermission();
+        if(perm !== "granted"){
+          result.error = "Permission non accordée.";
+          return result;
+        }
+      } catch(e){
+        result.error = "Impossible de demander la permission.";
+        return result;
+      }
     }
     const reg = state._swReg || await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
@@ -3934,11 +4058,12 @@ function dismissPushBanner(){
 }
 
 function shouldShowPushBanner(){
-  if(state.pushBannerDismissed || state.pushEnabled) return false;
+  if(state.pushBannerDismissed) return false;
   if(typeof Notification === "undefined") return false;
-  if(Notification.permission === "granted") return false;
   if(Notification.permission === "denied") return false;
-  try{ if(localStorage.getItem("pc_push_dismiss") === "1") return false; }catch(e){}
+  try{ if(localStorage.getItem("pc_push_dismiss") === "1" && Notification.permission !== "granted") return false; }catch(e){}
+  // Afficher si pas encore activé côté app, même si permission granted (ré-enregistrement)
+  if(state.pushEnabled && Notification.permission === "granted") return false;
   return state.view === "app" && !!state.profile;
 }
 
@@ -3963,16 +4088,30 @@ async function sendNativePush(userIds, title, body, url){
   try{
     const { data: { session } } = await sb.auth.getSession();
     if(!session) return;
+    const payload = { user_ids: userIds, title, body: body || "", url: url || "/" };
+    // 1) Client Supabase functions.invoke (plus fiable)
+    try{
+      if(sb.functions && typeof sb.functions.invoke === "function"){
+        const { error } = await sb.functions.invoke("send-push", { body: payload });
+        if(!error) return;
+        console.warn("send-push invoke:", error.message || error);
+      }
+    } catch(e1){ console.warn("send-push invoke:", e1.message); }
+    // 2) Repli fetch HTTP
     const base = (typeof SUPABASE_URL !== "undefined" ? SUPABASE_URL : (sb.supabaseUrl || "")).replace(/\/$/, "");
-    await fetch(base + "/functions/v1/send-push", {
+    const res = await fetch(base + "/functions/v1/send-push", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + session.access_token,
-        "apikey": sb.supabaseKey || ""
+        "apikey": (typeof SUPABASE_ANON_KEY !== "undefined" ? SUPABASE_ANON_KEY : (sb.supabaseKey || ""))
       },
-      body: JSON.stringify({ user_ids: userIds, title, body: body || "", url: url || "/" })
+      body: JSON.stringify(payload)
     });
+    if(!res.ok){
+      const t = await res.text().catch(()=>"");
+      console.warn("send-push HTTP", res.status, t.slice(0,200));
+    }
   } catch(e){
     console.warn("sendNativePush:", e.message);
   }
