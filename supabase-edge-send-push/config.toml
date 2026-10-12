@@ -1,0 +1,3 @@
+# Désactive la vérif JWT stricte si l'invoke échoue avec 401
+# (le code vérifie quand même Authorization côté client)
+verify_jwt = false

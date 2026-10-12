@@ -612,6 +612,11 @@ async function init(){
       state = fresh; render();
     }
   });
+  // Restaurer état push (évite bandeau à chaque connexion)
+  try{
+    if(localStorage.getItem("pc_push_ok") === "1"){ state.pushEnabled = true; state.pushBannerDismissed = true; }
+    if(localStorage.getItem("pc_push_dismiss") === "1"){ state.pushBannerDismissed = true; }
+  }catch(e){}
   if(session) await loadProfileAndRoute(); else { state.view = "auth"; render(); }
   registerServiceWorker();
 }
@@ -738,7 +743,7 @@ async function loadProfileAndRoute(retry){
     }
   } else if(data.role === "agent"){
     try{ await loadMyAgent(); }catch(e){}
-    try{ if(state.myAgent) await loadMissions(); else await loadJoinablePressings(); }catch(e){}
+    try{ if(state.myAgent){ await loadMissions(); try{ subscribeAgentOrders(); }catch(e){} } else await loadJoinablePressings(); }catch(e){}
   } else if(data.role === "admin"){
     try{ await Promise.all([loadAdminPressings(), loadAdminPassRequests(), loadPassSettings()]); }catch(e){}
   }
@@ -2484,44 +2489,69 @@ function renderSlotForm(kind, draft){
 async function savePressingLogoFromFile(input){
   const file = input && input.files && input.files[0];
   if(!file){ alert("Aucun fichier sélectionné."); return; }
-  if(!state.myPressing || !state.myPressing.id){ alert("Pressing introuvable."); return; }
-  if(file.size > 2*1024*1024){ alert("Image trop lourde (max 2 Mo)."); return; }
+  if(!state.myPressing || !state.myPressing.id){ alert("Pressing introuvable. Reconnecte-toi."); return; }
+  if(file.size > 5*1024*1024){ alert("Image trop lourde (max 5 Mo)."); return; }
   try{
-    // Compresser en JPEG ~400px pour passer en base (colonne TEXT)
-    const dataUrl = await new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        try{
-          const max = 400;
-          let w = img.width, h = img.height;
-          if(w > max || h > max){
-            if(w > h){ h = Math.round(h * max / w); w = max; }
-            else { w = Math.round(w * max / h); h = max; }
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, w, h);
-          URL.revokeObjectURL(url);
-          resolve(canvas.toDataURL("image/jpeg", 0.72));
-        } catch(e){ reject(e); }
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image illisible")); };
-      img.src = url;
+    // 1) Lire le fichier en dataURL (fiable sur Android / galerie)
+    const rawDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Lecture fichier impossible"));
+      reader.readAsDataURL(file);
     });
-    const { data, error } = await sb.from("pressings")
+    // 2) Essayer de compresser ; si échec (HEIC etc.), garder le dataURL brut s'il est raisonnable
+    let dataUrl = rawDataUrl;
+    try{
+      dataUrl = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          try{
+            const max = 280;
+            let w = img.width || 280, h = img.height || 280;
+            if(w > max || h > max){
+              if(w > h){ h = Math.round(h * max / w); w = max; }
+              else { w = Math.round(w * max / h); h = max; }
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0,0,w,h);
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL("image/jpeg", 0.7));
+          } catch(e){ reject(e); }
+        };
+        img.onerror = () => reject(new Error("decode"));
+        img.src = rawDataUrl;
+      });
+    } catch(_compressErr){
+      // HEIC / format non décodable par le canvas : on garde le fichier lu
+      if(typeof rawDataUrl === "string" && rawDataUrl.length > 900000){
+        throw new Error("Format photo non supporté (essaie JPG ou PNG depuis la galerie).");
+      }
+      dataUrl = rawDataUrl;
+    }
+    const { error: upErr } = await sb.from("pressings")
       .update({ logo_url: dataUrl })
-      .eq("id", state.myPressing.id)
-      .select("*")
-      .single();
+      .eq("id", state.myPressing.id);
+    if(upErr) throw upErr;
+    const { data, error } = await sb.from("pressings").select("*").eq("id", state.myPressing.id).maybeSingle();
     if(error) throw error;
-    state.myPressing = data;
+    if(data) state.myPressing = data;
+    else state.myPressing.logo_url = dataUrl;
     alert("Logo enregistré.");
     render();
   } catch(e){
     const msg = (e && e.message) || String(e);
-    alert("Erreur logo : " + msg + "\\nSi la colonne manque, exécute dans Supabase :\\nALTER TABLE public.pressings ADD COLUMN IF NOT EXISTS logo_url TEXT;");
+    let help = "";
+    if(/column.*logo_url|logo_url.*does not exist/i.test(msg)){
+      help = "\n\nExécute dans Supabase :\nALTER TABLE public.pressings ADD COLUMN IF NOT EXISTS logo_url TEXT;";
+    } else if(/policy|permission|RLS|row-level/i.test(msg)){
+      help = "\n\nDroit refusé. Vérifie que tu es propriétaire du pressing.";
+    } else if(/Format photo|illisible|decode|Lecture/i.test(msg)){
+      help = "\n\nAstuce : dans la galerie, choisis une photo en JPG/PNG (pas HEIC), ou « Fichiers » au lieu de « Photos ».";
+    }
+    alert("Erreur logo : " + msg + help);
   }
 }
 async function clearPressingLogo(){
@@ -2779,6 +2809,16 @@ async function publishCampaign(){
 
 // =============================== AGENT ===============================
 async function loadMyAgent(){ const { data } = await sb.from("agents").select("*, pressings(name)").eq("id", state.profile.id).maybeSingle(); state.myAgent = data; }
+function subscribeAgentOrders(){
+  try{ if(state.realtimeChannel){ sb.removeChannel(state.realtimeChannel); state.realtimeChannel = null; } }catch(e){}
+  const pid = state.myAgent?.pressing_id;
+  if(!pid) return;
+  state.realtimeChannel = sb.channel("agent-orders-"+pid)
+    .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: "pressing_id=eq."+pid }, async () => {
+      try{ await loadMissions(); render(); }catch(e){}
+    })
+    .subscribe();
+}
 async function loadMissions(){
   const [pu, de] = await Promise.all([
     sb.from("pickup_requests").select("*, orders(*)").eq("agent_id", state.profile.id).order("created_at",{ascending:false}),
@@ -2806,39 +2846,39 @@ async function loadMissions(){
 }
 function renderAgentApp(){
   if(!state.myAgent) return renderAgentJoinPressing();
-  if(state.campaignsView !== "none") return renderCampaignsHub();
+  // Pas de campagnes côté agent — uniquement les missions assignées
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:16px;">
-      <div><div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">${esc(state.myAgent.pressings?.name||'')}</div><div style="font-size:19px;font-family:'Playfair Display',Georgia,serif;">Mes missions</div></div>
-      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="setCampaignsView('list')">📢 Campagnes</button>
+      <div>
+        <div style="font-size:12px;color:var(--mutedLight);text-transform:uppercase;">${esc(state.myAgent.pressings?.name||'')}</div>
+        <div style="font-size:19px;font-family:'Playfair Display',Georgia,serif;">Mes missions</div>
+      </div>
+      <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="agentRefresh()">🔄</button>
     </div>
-    ${state.missions.length===0 ? `<div class="empty">Aucune mission assignée pour le moment.</div>` :
-      state.missions.map(o => { const isPickup = o.missionType === "collecte"; return `<div class="mission-card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div><div class="mission-type" style="color:${isPickup?'var(--teal)':'var(--amber)'};">${o.missionType}</div><div style="font-size:14px;font-weight:700;">${o.order_number}</div>
-            <div style="font-size:13px;color:var(--muted);margin-top:2px;">${esc(o.customer?.full_name || 'Client')}</div></div>
-          ${o.customer?.phone ? `<a href="tel:${o.customer.phone}" class="btn btn-secondary" style="width:auto;padding:7px 12px;margin:0;font-size:12px;">☎ Appeler</a>` : ""}
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Avance le statut d'une mission : le client et le pressing sont notifiés et mis à jour automatiquement.</p>
+    ${state.missions.length===0 ? `<div class="empty">Aucune mission assignée pour le moment.<br/><span style="font-size:12px;">Le pressing doit t'assigner une commande.</span></div>` :
+      state.missions.map(o => {
+        const isPickup = o.missionType === "collecte";
+        const st = normalizeStatus(o.order_status);
+        return `<div class="mission-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div>
+            <div class="mission-type" style="color:${isPickup?'var(--teal)':'var(--amber)'};">${isPickup?'COLLECTE':'LIVRAISON'}</div>
+            <div style="font-size:14px;font-weight:700;">${esc(o.order_number||'')}</div>
+            <div style="font-size:13px;color:var(--muted);">${esc(o.customer?.full_name||'Client')}</div>
+            ${o.customer?.home_address ? `<div style="font-size:12px;color:var(--mutedLight);margin-top:2px;">📍 ${esc(o.customer.home_address)}</div>` : ""}
+          </div>
+          ${o.customer?.phone ? `<a class="btn btn-secondary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;text-decoration:none;" href="tel:${esc(o.customer.phone)}">☎ Appeler</a>` : ""}
         </div>
-        <div style="font-size:12px;color:var(--muted);margin:6px 0 4px;">Étape : ${STATUS_LABELS[normalizeStatus(o.order_status)]||o.order_status}</div>
+        <div style="font-size:12px;margin:8px 0 6px;padding:6px 10px;background:var(--brand-soft);border-radius:8px;font-weight:600;">Étape actuelle : ${STATUS_LABELS[st]||st}</div>
         <button class="btn btn-primary" style="margin-top:4px;" onclick="agentProgress('${o.id}')">${agentActionLabel(o)}</button>
-      </div>`; }).join("")}
+      </div>`;
+      }).join("")}
   </div>`;
 }
-async function loadJoinablePressings(){
-  const { data } = await sb.from("pressings").select("id,name,address").eq("status","active");
-  state.joinablePressings = data || [];
-}
-function renderAgentJoinPressing(){
-  const list = state.joinablePressings || [];
-  return `<div class="screen">
-    <h2 style="font-size:18px;margin-bottom:6px;">Rejoindre un pressing</h2>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">Ton compte agent n'est pas encore rattaché à un pressing. Choisis celui pour lequel tu travailles.</p>
-    ${list.length===0 ? `<div class="empty">Aucun pressing actif pour le moment.</div>` :
-      list.map(p => `<div class="pressing-pick-card" onclick="joinAsAgent('${p.id}')">
-        <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(p.address||'')}</div>
-      </div>`).join("")}
-  </div>`;
+async function agentRefresh(){
+  await loadMissions();
+  render();
 }
 async function joinAsAgent(pressingId){
   const { error } = await sb.from("agents").insert({ id: state.profile.id, pressing_id: pressingId, phone: state.profile.phone, status:"active" });
@@ -3913,12 +3953,12 @@ function urlBase64ToUint8Array(base64String){
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-async function ensurePushSubscription(){
-  // Automatique : lie l'abonnement push au compte connecté (plus besoin de coller l'UUID)
+async function ensurePushSubscription(forceResub){
+  // forceResub=true après changement de clés VAPID
   const result = { ok:false, browserOk:false, dbOk:false, error:null };
   try{
     if(!("Notification" in window) || !("PushManager" in window)){
-      result.error = "Navigateur incompatible.";
+      result.error = "Navigateur incompatible (utilisez Chrome Android ou installez la PWA).";
       return result;
     }
     if(!state.profile){
@@ -3930,7 +3970,6 @@ async function ensurePushSubscription(){
       return result;
     }
     if(Notification.permission !== "granted"){
-      // Demander la permission (nécessaire pour le push hors navigateur)
       try{
         const perm = await Notification.requestPermission();
         if(perm !== "granted"){
@@ -3942,14 +3981,24 @@ async function ensurePushSubscription(){
         return result;
       }
     }
-    const reg = state._swReg || await navigator.serviceWorker.ready;
+    const reg = state._swReg || await navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(()=>null) || await navigator.serviceWorker.ready;
+    state._swReg = reg;
     let sub = await reg.pushManager.getSubscription();
+    // Toujours resouscrire si forcé OU si la clé VAPID a changé (stockée localement)
+    const vapidMark = (typeof VAPID_PUBLIC_KEY === "string" ? VAPID_PUBLIC_KEY.slice(0,24) : "");
+    let storedMark = "";
+    try{ storedMark = localStorage.getItem("pc_vapid_mark") || ""; }catch(e){}
+    if(sub && (forceResub || (vapidMark && storedMark && storedMark !== vapidMark))){
+      try{ await sub.unsubscribe(); }catch(e){}
+      sub = null;
+    }
     if(!sub){
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
       });
     }
+    try{ localStorage.setItem("pc_vapid_mark", vapidMark); }catch(e){}
     result.browserOk = true;
     const j = sub.toJSON();
     if(!j.keys || !j.keys.p256dh || !j.keys.auth){
@@ -4026,7 +4075,7 @@ async function enablePushFromUI(){
       render();
       return;
     }
-    const res = await ensurePushSubscription();
+    const res = await ensurePushSubscription(true);
     if(res.browserOk){
       try{
         new Notification("Pressing Connecté", {
@@ -4058,12 +4107,13 @@ function dismissPushBanner(){
 }
 
 function shouldShowPushBanner(){
-  if(state.pushBannerDismissed) return false;
+  if(state.pushBannerDismissed || state.pushEnabled) return false;
   if(typeof Notification === "undefined") return false;
   if(Notification.permission === "denied") return false;
-  try{ if(localStorage.getItem("pc_push_dismiss") === "1" && Notification.permission !== "granted") return false; }catch(e){}
-  // Afficher si pas encore activé côté app, même si permission granted (ré-enregistrement)
-  if(state.pushEnabled && Notification.permission === "granted") return false;
+  try{
+    if(localStorage.getItem("pc_push_ok") === "1") return false;
+    if(localStorage.getItem("pc_push_dismiss") === "1") return false;
+  }catch(e){}
   return state.view === "app" && !!state.profile;
 }
 
