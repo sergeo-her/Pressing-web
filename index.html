@@ -4142,14 +4142,14 @@ async function sendNativePush(userIds, title, body, url){
     // 1) Client Supabase functions.invoke (plus fiable)
     try{
       if(sb.functions && typeof sb.functions.invoke === "function"){
-        const { error } = await sb.functions.invoke("send-push", { body: payload });
+        const { error } = await sb.functions.invoke("rapid-endpoint", { body: payload });
         if(!error) return;
-        console.warn("send-push invoke:", error.message || error);
+        console.warn("rapid-endpoint invoke:", error.message || error);
       }
-    } catch(e1){ console.warn("send-push invoke:", e1.message); }
+    } catch(e1){ console.warn("rapid-endpoint invoke:", e1.message); }
     // 2) Repli fetch HTTP
     const base = (typeof SUPABASE_URL !== "undefined" ? SUPABASE_URL : (sb.supabaseUrl || "")).replace(/\/$/, "");
-    const res = await fetch(base + "/functions/v1/send-push", {
+    const res = await fetch(base + "/functions/v1/rapid-endpoint", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -4160,7 +4160,7 @@ async function sendNativePush(userIds, title, body, url){
     });
     if(!res.ok){
       const t = await res.text().catch(()=>"");
-      console.warn("send-push HTTP", res.status, t.slice(0,200));
+      console.warn("rapid-endpoint HTTP", res.status, t.slice(0,200));
     }
   } catch(e){
     console.warn("sendNativePush:", e.message);
