@@ -753,6 +753,7 @@ async function loadProfileAndRoute(retry){
   if(notifPollTimer) clearInterval(notifPollTimer);
   notifPollTimer = setInterval(loadNotifications, 60000);
   state.view = "app";
+    try{ subscribeMyNotifications(); }catch(e){}
   render();
   setTimeout(() => { try{ ensurePushSubscription(); }catch(e){} }, 2500);
 }
@@ -4168,6 +4169,37 @@ async function sendNativePush(userIds, title, body, url){
 }
 
 /** Insert notification DB + tentative push native */
+
+function subscribeMyNotifications(){
+  try{
+    if(!state.profile?.id) return;
+    if(state._notifChannel){ try{ sb.removeChannel(state._notifChannel); }catch(e){} }
+    state._notifChannel = sb.channel("my-notifs-"+state.profile.id)
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "notifications",
+        filter: "user_id=eq."+state.profile.id
+      }, async (payload) => {
+        const row = payload.new || {};
+        try{
+          if(typeof Notification !== "undefined" && Notification.permission === "granted"){
+            const reg = state._swReg || (navigator.serviceWorker && await navigator.serviceWorker.ready.catch(()=>null));
+            const title = row.title || "Pressing Connecté";
+            const body = row.message || "";
+            if(reg && reg.showNotification){
+              await reg.showNotification(title, { body, icon: "/icon-192.png", tag: "pc-"+row.id, data: { url: "/" } });
+            } else {
+              new Notification(title, { body, icon: "/icon-192.png" });
+            }
+          }
+        } catch(e){}
+        try{ await loadNotifications(); render(); }catch(e){}
+      })
+      .subscribe();
+  } catch(e){ console.warn("subscribeMyNotifications", e.message); }
+}
+
 async function notifyUser(userId, title, message, url){
   try{
     await sb.from("notifications").insert({
@@ -4177,7 +4209,25 @@ async function notifyUser(userId, title, message, url){
       is_read: false
     });
   } catch(e){ console.warn("notify insert:", e.message); }
-  await sendNativePush([userId], title, message, url);
+  // Push serveur (si Edge Function OK)
+  try{ await sendNativePush([userId], title, message, url); }catch(e){}
+  // Notif locale si c'est mon compte (fonctionne même sans Edge Function)
+  try{
+    if(state.profile && state.profile.id === userId && typeof Notification !== "undefined" && Notification.permission === "granted"){
+      const reg = state._swReg || (navigator.serviceWorker && await navigator.serviceWorker.ready.catch(()=>null));
+      if(reg && reg.showNotification){
+        await reg.showNotification(title || "Pressing Connecté", {
+          body: message || "",
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
+          tag: "pc-local-" + Date.now(),
+          data: { url: url || "/" }
+        });
+      } else {
+        new Notification(title || "Pressing Connecté", { body: message || "", icon: "/icon-192.png" });
+      }
+    }
+  } catch(e){ console.warn("local notif:", e.message); }
 }
 
 let deferredInstallPrompt = null;
