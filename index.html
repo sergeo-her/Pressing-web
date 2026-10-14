@@ -176,6 +176,23 @@
   .brand-logo{ display:flex; align-items:center; gap:8px; font-family:'Playfair Display',Georgia,serif; font-weight:700; font-size:19px; color:var(--brand-dark); }
   .brand-logo .mark{ width:30px; height:30px; border-radius:9px; background:var(--brand); color:#fff; display:flex; align-items:center; justify-content:center; font-size:15px; }
 </style>
+
+  <!-- OneSignal Web Push -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.ONESIGNAL_APP_ID = "14ed4064-0bcf-4a8a-b6c7-41741b57a283";
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      await OneSignal.init({
+        appId: window.ONESIGNAL_APP_ID,
+        serviceWorkerPath: "OneSignalSDKWorker.js",
+        serviceWorkerParam: { scope: "/" },
+        allowLocalhostAsSecureOrigin: true,
+      });
+      window._oneSignalReady = true;
+      window.OneSignal = OneSignal;
+    });
+  </script>
 </head>
 <body>
 <div id="app"></div>
@@ -754,6 +771,7 @@ async function loadProfileAndRoute(retry){
   notifPollTimer = setInterval(loadNotifications, 60000);
   state.view = "app";
     try{ subscribeMyNotifications(); }catch(e){}
+    try{ if(state.profile?.id) oneSignalLoginUser(state.profile.id); }catch(e){}
   render();
   setTimeout(() => { try{ ensurePushSubscription(); }catch(e){} }, 2500);
 }
@@ -3938,6 +3956,53 @@ function renderAdminPressingDetail(p){
 
 // =============================== PWA & WEB PUSH NATIF ===============================
 // Clé publique VAPID (à apparier avec VAPID_PRIVATE_KEY côté Edge Function)
+
+const ONESIGNAL_APP_ID = "14ed4064-0bcf-4a8a-b6c7-41741b57a283";
+
+async function waitOneSignal(timeoutMs){
+  const t0 = Date.now();
+  timeoutMs = timeoutMs || 8000;
+  while(Date.now() - t0 < timeoutMs){
+    if(window.OneSignal && window._oneSignalReady) return window.OneSignal;
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return window.OneSignal || null;
+}
+
+async function oneSignalLoginUser(userId){
+  try{
+    const OS = await waitOneSignal(5000);
+    if(!OS || !userId) return;
+    if(typeof OS.login === "function"){
+      await OS.login(String(userId));
+    } else if(OS.User && typeof OS.User.login === "function"){
+      await OS.User.login(String(userId));
+    }
+  } catch(e){ console.warn("OneSignal login:", e.message); }
+}
+
+async function oneSignalRequestPermission(){
+  const result = { ok:false, error:null };
+  try{
+    const OS = await waitOneSignal(8000);
+    if(!OS){ result.error = "OneSignal non chargé"; return result; }
+    if(typeof OS.Notifications !== "undefined" && OS.Notifications.requestPermission){
+      await OS.Notifications.requestPermission(true);
+    } else if(typeof OS.registerForPushNotifications === "function"){
+      await OS.registerForPushNotifications();
+    } else if(typeof Notification !== "undefined"){
+      await Notification.requestPermission();
+    }
+    result.ok = true;
+    state.pushEnabled = true;
+    state.pushBannerDismissed = true;
+    try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+  } catch(e){
+    result.error = e.message || String(e);
+  }
+  return result;
+}
+
 const VAPID_PUBLIC_KEY = "BKR8gHH3_saR8zhkXPVEWyJ5mLvdTcn29794Oh-cEdKT31q-lfAlK8-SV9QIlm7t8aNCmv1wKnQaj55dpbIPgOA";
 
 function registerServiceWorker(){
@@ -4065,75 +4130,26 @@ async function ensurePushSubscription(forceResub){
 
 async function enablePushFromUI(){
   try{
-    if(!("Notification" in window)){
-      alert("Les notifications ne sont pas disponibles sur cet appareil.");
-      return;
+    // 1) OneSignal (push écran verrouillé / app fermée)
+    const osRes = await oneSignalRequestPermission();
+    if(state.profile?.id){
+      await oneSignalLoginUser(state.profile.id);
     }
-    const perm = await Notification.requestPermission();
-    if(perm !== "granted"){
-      alert("Permission refusée. Vous pourrez réessayer plus tard dans les réglages du navigateur.");
-      state.pushBannerDismissed = true;
-      render();
-      return;
-    }
-    const res = await ensurePushSubscription(true);
-    if(res.browserOk){
-      try{
-        new Notification("Pressing Connecté", {
-          body: "Notifications activées. Vous serez alerté des nouvelles commandes et messages.",
-          icon: "/icon-192.png"
-        });
-      } catch(e){}
-      state.pushBannerDismissed = true;
-      state.pushEnabled = true;
-      render();
-      // Détail technique uniquement dans la console (pas à l'écran utilisateur)
-      if(!res.dbOk){
-        console.warn("[push] enregistrement serveur:", res.error || "échec");
-      }
+    // 2) Ancien abonnement VAPID (repli)
+    try{ await ensurePushSubscription(true); }catch(e){}
+    if(osRes.ok){
+      alert("Notifications activées.\nTu pourras recevoir des alertes même écran verrouillé (Android / PWA).");
     } else {
-      console.warn("[push] activation:", res.error || "échec");
-      alert("Impossible d'activer les notifications pour le moment. Réessayez plus tard.");
+      alert("Permission : " + (osRes.error || "vérifie les réglages du navigateur."));
     }
+    state.pushBannerDismissed = true;
+    try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+    render();
   } catch(e){
-    console.warn("[push]", e);
-    alert("Impossible d'activer les notifications pour le moment. Réessayez plus tard.");
+    alert("Erreur activation : " + (e.message || e));
   }
 }
 
-function dismissPushBanner(){
-  state.pushBannerDismissed = true;
-  try{ localStorage.setItem("pc_push_dismiss", "1"); }catch(e){}
-  render();
-}
-
-function shouldShowPushBanner(){
-  if(state.pushBannerDismissed || state.pushEnabled) return false;
-  if(typeof Notification === "undefined") return false;
-  if(Notification.permission === "denied") return false;
-  try{
-    if(localStorage.getItem("pc_push_ok") === "1") return false;
-    if(localStorage.getItem("pc_push_dismiss") === "1") return false;
-  }catch(e){}
-  return state.view === "app" && !!state.profile;
-}
-
-function renderPushBanner(){
-  if(!shouldShowPushBanner()) return "";
-  return `<div class="card" style="margin:10px 16px 0;border-color:var(--brand);background:var(--brand-soft);display:flex;gap:12px;align-items:flex-start;">
-    <div style="font-size:22px;">🔔</div>
-    <div style="flex:1;">
-      <div style="font-weight:700;font-size:14px;color:var(--brand-dark);">Activer les notifications</div>
-      <p style="font-size:12px;color:var(--muted);margin:4px 0 10px;">Recevez une alerte même quand l'app est fermée (nouvelles commandes, Pass, messages).</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="enablePushFromUI()">Activer</button>
-        <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="dismissPushBanner()">Plus tard</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-/** Envoie une push native via Edge Function (si déployée). Échec silencieux si absente. */
 async function sendNativePush(userIds, title, body, url){
   if(!userIds || !userIds.length) return;
   try{
