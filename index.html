@@ -1952,18 +1952,30 @@ async function ensurePressingForOwner(profile){
   }
   const name = (profile.full_name || "Mon Pressing").trim() || "Mon Pressing";
   const phone = (profile.phone || "").trim() || null;
+  // 1) RPC SECURITY DEFINER (ignore les policies RLS recursives)
+  try{
+    const { data: rpcRow, error: rpcErr } = await sb.rpc("create_my_pressing", { p_name: name, p_phone: phone });
+    if(!rpcErr && rpcRow){
+      const row = Array.isArray(rpcRow) ? rpcRow[0] : rpcRow;
+      if(row && row.id) return row;
+    }
+    if(rpcErr) console.warn("create_my_pressing RPC:", rpcErr.message);
+  } catch(e){ console.warn("create_my_pressing:", e.message); }
+  // 2) Repli insert direct
   const { data: pressing, error } = await sb.from("pressings").insert({
     name, phone, owner_profile_id: profile.id, status: "active", address: null, invite_code: generateInviteCode()
   }).select("*").single();
   if(error || !pressing){
     console.error("Création pressing échouée:", error);
-    throw new Error(error?.message || "Insertion pressing refusée (RLS). Lance SCHEMA_FK_FIX.sql.");
+    throw new Error(error?.message || "Insertion pressing refusée (RLS). Exécute PRESSINGS_FINAL_MOBILE.sql dans Supabase.");
   }
   const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
-  await sb.from("subscriptions").insert({
-    pressing_id: pressing.id, plan: "trial",
-    trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
-  });
+  try{
+    await sb.from("subscriptions").insert({
+      pressing_id: pressing.id, plan: "trial",
+      trial_end: trialEnd.toISOString().slice(0,10), manual_status: "ok"
+    });
+  } catch(e){}
   return pressing;
 }
 async function loadMyPressing(){
@@ -1977,7 +1989,7 @@ async function manualCreateMyPressing(){
     const created = await ensurePressingForOwner(state.profile);
     await loadMyPressing();
     if(!state.myPressing){
-      alert("Impossible de créer le pressing. Exécute SCHEMA_FK_FIX.sql dans Supabase (droits pressings), puis réessaie.\n" + (created ? "" : "Création refusée par la base."));
+      alert("Impossible de créer le pressing. Exécute PRESSINGS_FINAL_MOBILE.sql dans Supabase (BLOC 1 à 4), puis réessaie.\n" + (created ? "" : "Création refusée par la base."));
       return;
     }
     try{ await ensurePressingInviteCode(); }catch(e){}
