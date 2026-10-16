@@ -188,11 +188,32 @@
         serviceWorkerPath: "OneSignalSDKWorker.js",
         serviceWorkerParam: { scope: "/" },
         allowLocalhostAsSecureOrigin: true,
+        serviceWorkerUpdaterPath: "OneSignalSDKUpdaterWorker.js",
       });
       window._oneSignalReady = true;
       window.OneSignal = OneSignal;
+      try {
+        // Opt-in si déjà autorisé par le navigateur
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          if (OneSignal.User?.PushSubscription?.optIn) await OneSignal.User.PushSubscription.optIn();
+        }
+      } catch (e) {}
     });
   </script>
+
+  <!-- Firebase Cloud Messaging -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-messaging-compat.js"></script>
+  <script>
+    window.FIREBASE_CONFIG = {'apiKey': 'AIzaSyCsjiM0VMf4W6Fy_QNi1j9lj5OV2aWNS3Q', 'authDomain': 'pressingconnect-b6f08.firebaseapp.com', 'projectId': 'pressingconnect-b6f08', 'storageBucket': 'pressingconnect-b6f08.firebasestorage.app', 'messagingSenderId': '1067312541714', 'appId': '1:1067312541714:web:1099b5e383bde2c96868cb', 'measurementId': 'G-EZ7NSNBE31'};
+    window.FIREBASE_VAPID_KEY = "BBamoIJ-1qTWQS2flbpAiHvz34Nqw32csRrlB0EhrmceARTkt9pTbbD7OMS3tzxvFReKHWwS_ixQwA5EAJc9KdU";
+    try {
+      if (typeof firebase !== "undefined" && !window._firebaseApp) {
+        window._firebaseApp = firebase.initializeApp(window.FIREBASE_CONFIG);
+      }
+    } catch (e) { console.warn("Firebase init", e); }
+  </script>
+
 </head>
 <body>
 <div id="app"></div>
@@ -755,7 +776,7 @@ async function loadProfileAndRoute(retry){
     }
     if(state.myPressing){
       if(!state.myPressing.invite_code){ try{ await ensurePressingInviteCode(); }catch(e){} }
-      try{ await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]); }catch(e){}
+      try{ await Promise.all([loadPressingOrders(), loadMySubscription(), loadPressingClients(), loadPressingCampaigns()]); }catch(e){}
       try{ attachPressingRealtime(); }catch(e){}
     }
   } else if(data.role === "agent"){
@@ -772,6 +793,7 @@ async function loadProfileAndRoute(retry){
   state.view = "app";
     try{ subscribeMyNotifications(); }catch(e){}
     try{ if(state.profile?.id) oneSignalLoginUser(state.profile.id); }catch(e){}
+    try{ if(state.profile?.id && typeof Notification!=="undefined" && Notification.permission==="granted") enableFcmPush(); }catch(e){}
   render();
   setTimeout(() => { try{ ensurePushSubscription(); }catch(e){} }, 2500);
 }
@@ -1432,7 +1454,7 @@ function renderClientHome(){
   </div>
   ${renderCampaignsForClient()}
   <div class="screen">
-    ${pPhone ? `<a class="wa-btn" href="tel:${pPhone}" style="margin-bottom:8px;">☎ Appeler le pressing · ${esc(pPhone)}</a>` : ""}
+    ${pPhone ? `<a class="wa-btn" href="tel:${pPhone}" style="margin-bottom:8px;">☎ Appeler le pressing</a>` : ""}
     <a class="wa-btn" href="https://wa.me/${(state.clientConfig?.pressing?.whatsapp||'').replace(/\D/g,'')}" target="_blank">💬 Contacter le pressing sur WhatsApp</a>
   </div>
   ${renderReviewsForClient()}
@@ -1624,8 +1646,6 @@ function renderBookingFlow(){
             </div>
           </div>`; }).join("")}
       </div>
-      <div class="field"><div class="field-label">Estimation rapide (si tu ne connais pas le détail)</div>
-        <div class="chip-row">${["1–5","6–10","11–20","20+"].map(q => `<button class="chip ${b.quantity===q?'active':''}" onclick="setBookingField('quantity','${q}')">${q} vêtements</button>`).join("")}</div></div>
       <div class="field"><div class="field-label">Quantité exacte (optionnel)</div>
         <input type="number" min="0" value="${esc(b.exactQuantity)}" placeholder="Ex : 14" oninput="state.booking.exactQuantity=this.value" /></div>
       <div class="btn-row"><button class="btn btn-secondary" onclick="bookingStep(0)">Retour</button><button class="btn btn-primary" onclick="bookingStep(2)">Continuer</button></div>
@@ -1993,7 +2013,7 @@ async function manualCreateMyPressing(){
       return;
     }
     try{ await ensurePressingInviteCode(); }catch(e){}
-    await Promise.all([loadPressingOrders(), loadPressingAgents(), loadMySubscription(), loadPressingClients()]);
+    await Promise.all([loadPressingOrders(), loadMySubscription(), loadPressingClients(), loadPressingCampaigns()]);
     attachPressingRealtime();
     render();
     alert("Pressing créé. Essai 30 jours activé.");
@@ -2339,6 +2359,10 @@ function renderPressingClientCards(list){
 function pressingSelect(id){ setState({ pressingSelectedOrderId:id }); }
 function pressingBack(){ setState({ pressingSelectedOrderId:null }); }
 function renderPressingOrderDetail(order){
+  const slots = [...(state.mySlots||[]), ...(state.myDeliverySlots||[])];
+  const pickupOpts = (state.mySlots||[]).map(s => `<option value="${s.id}" ${order.pickup_slot_id===s.id?'selected':''}>${esc(s.zone_label||s.label||'Créneau')} ${(s.start_time||'').slice(0,5)}–${(s.end_time||'').slice(0,5)}</option>`).join("");
+  const deliveryOpts = (state.myDeliverySlots||[]).map(s => `<option value="${s.id}" ${order.delivery_slot_id===s.id?'selected':''}>${esc(s.zone_label||s.label||'Créneau')} ${(s.start_time||'').slice(0,5)}–${(s.end_time||'').slice(0,5)}</option>`).join("");
+  const itemsText = (order.order_items||[]).map(it => `${it.item_name||'Article'} x${it.quantity||1}`).join("\n");
   return `<div class="screen">
     <div class="header-row"><div class="header-left"><button class="back-btn" onclick="pressingBack()">←</button><div class="header-title">${order.order_number}</div></div></div>
     <div style="margin-top:12px;">
@@ -2347,26 +2371,85 @@ function renderPressingOrderDetail(order){
       </div>
       ${order.customer?.home_address ? `<div class="info-row"><div class="lab">🏠 Domicile</div><div class="val">${esc(order.customer.home_address)}</div></div>` : ""}
       ${order.customer?.work_address ? `<div class="info-row"><div class="lab">💼 Travail</div><div class="val">${esc(order.customer.work_address)}</div></div>` : ""}
-      <div class="info-row"><div><div class="lab">Collecte</div><div class="val">${order.pickup_date}${order.pickupSlot ? ` · ${esc(order.pickupSlot.label)}${order.pickupSlot.zone_label?' — '+esc(order.pickupSlot.zone_label):''} (${order.pickupSlot.start_time.slice(0,5)}–${order.pickupSlot.end_time.slice(0,5)})${order.pickupSlot.landmark?'<br/><span style="font-size:12px;color:var(--muted)">'+esc(order.pickupSlot.landmark)+'</span>':''}` : ' · sans créneau fixe'}</div></div></div>
-      <div class="info-row"><div><div class="lab">Livraison</div><div class="val">${order.deliverySlot ? `${esc(order.deliverySlot.label)}${order.deliverySlot.zone_label?' — '+esc(order.deliverySlot.zone_label):''} (${order.deliverySlot.start_time.slice(0,5)}–${order.deliverySlot.end_time.slice(0,5)})${order.deliverySlot.landmark?'<br/><span style="font-size:12px;color:var(--muted)">'+esc(order.deliverySlot.landmark)+'</span>':''}` : 'Pas encore de créneau fixe'}</div></div></div>
-      <div class="info-row"><div><div class="lab">Quantité</div><div class="val">${order.quantity_count ? order.quantity_count + ' article(s)' : (order.quantity_estimate || "—")}</div></div></div>
-      ${(order.order_items && order.order_items.length) ? `<div class="card"><div class="field-label">Détail</div>${order.order_items.map(it => `<div class="summary-row"><span>${esc(it.item_name||'Article')} ×${it.quantity}</span><span class="v">${fcfa(it.total_price)}</span></div>`).join("")}</div>` : ""}
+
+      <div class="card">
+        <div class="field-label">Créneau de collecte</div>
+        <select id="odPickupSlot" style="width:100%;margin-bottom:8px;">
+          <option value="">Sans créneau fixe</option>
+          ${pickupOpts}
+        </select>
+        <div class="field-label">Date collecte</div>
+        <input type="date" id="odPickupDate" value="${esc(order.pickup_date||'')}" style="width:100%;margin-bottom:8px;" />
+      </div>
+
+      <div class="card">
+        <div class="field-label">Créneau de livraison</div>
+        <select id="odDeliverySlot" style="width:100%;">
+          <option value="">Pas encore de créneau fixe</option>
+          ${deliveryOpts}
+        </select>
+      </div>
+
+      <div class="card">
+        <div class="field-label">Quantité (nombre d'articles)</div>
+        <input type="number" id="odQty" min="0" value="${order.quantity_count != null ? order.quantity_count : ''}" placeholder="Ex : 12" style="width:100%;margin-bottom:8px;" />
+        <div class="field-label">Articles collectés (un par ligne : Nom xQté)</div>
+        <textarea id="odItems" rows="3" placeholder="Lavage x5&#10;Repassage x2" style="width:100%;">${esc(itemsText)}</textarea>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="saveOrderDetails('${order.id}')">Enregistrer créneaux / quantité / articles</button>
+      </div>
+
       <div class="card"><div class="field-label">Montant final</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <input type="number" value="${order.final_amount || order.estimated_amount || 0}" style="width:110px;" oninput="pendingFinalAmount=this.value" />
           <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;" onclick="saveFinalAmount('${order.id}')">Enregistrer</button>
         </div>
       </div>
-      <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-        <div><div style="font-size:14px;">Agent</div><div style="font-size:12px;color:var(--muted);">${state.pressingAgents.length===0?'Aucun agent':''}</div></div>
-        ${state.pressingAgents.length ? `<div class="chip-row">${state.pressingAgents.map(a => `<button class="chip" onclick="assignAgent('${order.id}','${a.id}')">${esc(a.profiles?.full_name||'Agent')}</button>`).join("")}</div>` : ""}
-      </div>
+
       <div class="card"><div style="font-size:14px;margin-bottom:4px;">Statut actuel</div><div style="font-size:14px;font-weight:700;color:var(--teal);">${STATUS_LABELS[order.order_status]}</div></div>
       <button class="btn btn-secondary" style="margin-top:4px;" onclick="downloadOrderInvoice('${order.id}')">📄 Télécharger la facture</button>
       ${!["termine","annule"].includes(order.order_status) ? `<button class="btn btn-primary" onclick="pressingAdvance('${order.id}')">Faire avancer → ${STATUS_LABELS[nextStatus(order.order_status)]}</button>` : ""}
     </div>
   </div>`;
 }
+
+async function saveOrderDetails(orderId){
+  try{
+    const pickup_slot_id = document.getElementById("odPickupSlot")?.value || null;
+    const delivery_slot_id = document.getElementById("odDeliverySlot")?.value || null;
+    const pickup_date = document.getElementById("odPickupDate")?.value || null;
+    const qtyRaw = document.getElementById("odQty")?.value;
+    const quantity_count = qtyRaw === "" || qtyRaw == null ? null : parseInt(qtyRaw, 10);
+    const itemsRaw = (document.getElementById("odItems")?.value || "").trim();
+    const updates = {
+      pickup_slot_id: pickup_slot_id || null,
+      delivery_slot_id: delivery_slot_id || null,
+      updated_at: new Date().toISOString()
+    };
+    if(pickup_date) updates.pickup_date = pickup_date;
+    if(quantity_count != null && !isNaN(quantity_count)) updates.quantity_count = quantity_count;
+    const { error } = await sb.from("orders").update(updates).eq("id", orderId);
+    if(error) throw error;
+    // Articles : remplacer order_items
+    if(itemsRaw !== undefined){
+      try{ await sb.from("order_items").delete().eq("order_id", orderId); }catch(e){}
+      const rows = itemsRaw.split(/\n/).map(l => l.trim()).filter(Boolean).map(line => {
+        let name = line, q = 1;
+        const m = line.match(/^(.*?)\s*[x×]\s*(\d+)\s*$/i) || line.match(/^(.*?)\s+(\d+)\s*$/);
+        if(m){ name = m[1].trim(); q = parseInt(m[2],10)||1; }
+        return { order_id: orderId, item_name: name || "Article", quantity: q, unit_price: 0, total_price: 0 };
+      });
+      if(rows.length) await sb.from("order_items").insert(rows);
+    }
+    await loadPressingOrders();
+    // garder la fiche ouverte
+    state.pressingSelectedOrderId = orderId;
+    render();
+    alert("Détails enregistrés.");
+  } catch(e){
+    alert("Erreur enregistrement : " + (e.message || e));
+  }
+}
+
 function downloadOrderInvoice(orderId){
   const order = state.pressingOrders.find(o => o.id === orderId);
   if(!order) return;
@@ -2619,26 +2702,6 @@ function renderPressingConfig(){
       </div>
     </div>
 
-    <div class="header-row" style="margin:16px 0 8px;"><div style="font-size:14px;font-weight:700;">Agents de collecte</div>
-      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;" onclick="refreshPressingAgents()">🔄</button></div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">Les agents sont créés <b>uniquement par vous</b> ici. Après création, l'agent se connecte sur le <b>même site</b> avec l'e-mail et le mot de passe que vous lui donnez — son écran affiche les missions de collecte / livraison.</p>
-    <div class="card" style="margin-bottom:12px;border:1px solid var(--brand);">
-      <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Ajouter un agent</div>
-      <div class="field" style="margin:0 0 8px;"><div class="field-label">Nom</div><input type="text" id="newAgentName" placeholder="Nom de l'agent" /></div>
-      <div class="field" style="margin:0 0 8px;"><div class="field-label">Téléphone</div><input type="tel" id="newAgentPhone" placeholder="6XX XX XX XX" /></div>
-      <div class="field" style="margin:0 0 8px;"><div class="field-label">E-mail (identifiant de connexion)</div><input type="email" id="newAgentEmail" placeholder="agent@email.com" /></div>
-      <div class="field" style="margin:0 0 8px;"><div class="field-label">Mot de passe temporaire</div><input type="text" id="newAgentPassword" placeholder="min. 6 caractères" /></div>
-      <button class="btn btn-primary" style="margin:0;" onclick="pressingAddAgent()">Créer et lier l'agent</button>
-    </div>
-    ${state.pressingAgents.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun agent pour l'instant.</p>` :
-      state.pressingAgents.map(a => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-        <div>
-          <div style="font-size:14px;font-weight:600;">${esc(a.profiles?.full_name || 'Agent')}</div>
-          <div style="font-size:12px;color:var(--muted);">${esc(a.profiles?.phone || a.phone || '')}</div>
-        </div>
-        <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:12px;color:#B42323;" onclick="pressingRemoveAgent('${a.id}')">Retirer</button>
-      </div>`).join("")}
-
     <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Services & tarifs</div>
     ${state.myServices.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun service. Ajoute-en un ci-dessous.</p>` :
       state.myServices.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
@@ -2725,10 +2788,15 @@ async function toggleReviewFeatured(id, current){
 }
 
 // ---- Campagnes ----
-function setCampaignsView(v){
+async function setCampaignsView(v){
   state.campaignsView = v;
-  if(v === "list") loadPressingCampaigns();
-  if(v === "new") state.draftCampaign = { title:"", message:"", campaign_date:"", mode:"domicile", slots:[{zone_label:"",start_time:"07:00",end_time:"09:00"}] };
+  if(v === "new"){
+    state.draftCampaign = { title:"", message:"", campaign_date:"", mode:"domicile", slots:[{zone_label:"",start_time:"07:00",end_time:"09:00"}] };
+  }
+  // Toujours recharger la liste avant affichage (corrige l'écran vide au premier ouverture)
+  if(v === "list"){
+    try{ await loadPressingCampaigns(); }catch(e){ console.warn("loadPressingCampaigns", e.message); }
+  }
   render();
 }
 async function loadPressingCampaigns(){
@@ -2744,23 +2812,78 @@ async function loadPressingCampaigns(){
 }
 function renderCampaignsHub(){ return state.campaignsView === "new" ? renderNewCampaignForm() : renderPressingCampaignsList(); }
 function renderPressingCampaignsList(){
+  const list = state.pressingCampaigns || [];
   return `<div class="screen">
     <div class="header-row"><div class="header-title">Campagnes de ramassage</div>
       <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;" onclick="setCampaignsView('new')">+ Nouvelle</button></div>
     <p style="font-size:12px;color:var(--muted);margin:8px 0 12px;">Envoie un message programmé à ton réseau de clients (ramassage groupé par quartier/heure). N'empêche pas les commandes spontanées classiques.</p>
-    ${(state.pressingCampaigns||[]).length===0 ? `<div class="empty">Aucune campagne publiée.</div>` :
-      state.pressingCampaigns.map(c => `<div class="card">
-        <div style="font-weight:700;">${esc(c.title)}</div>
-        <div style="font-size:12px;color:var(--muted);margin:2px 0 6px;">${c.campaign_date} · ${(state.campaignResponseCounts[c.id])||0} confirmation(s)</div>
-        <div class="chip-row">${(c.campaign_slots||[]).map(s => `<span class="chip">${esc(s.zone_label)} · ${s.start_time.slice(0,5)}–${s.end_time.slice(0,5)}</span>`).join("")}</div>
-      </div>`).join("")}
+    ${list.length===0 ? `<div class="empty">Aucune campagne publiée.</div>` :
+      list.map(c => {
+        const st = c.status || "published";
+        const inactive = st === "draft" || st === "cancelled" || st === "inactive";
+        return `<div class="card" style="${inactive?'opacity:0.65;':''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;">
+            <div style="font-weight:700;">${esc(c.title)}${inactive?` <span style="font-size:11px;color:var(--muted);">(${st==='cancelled'?'supprimée':st==='inactive'?'désactivée':st})</span>`:''}</div>
+            <div style="font-size:12px;color:var(--muted);margin:2px 0 6px;">${c.campaign_date} · ${(state.campaignResponseCounts[c.id])||0} confirmation(s)</div>
+            <div class="chip-row">${(c.campaign_slots||[]).map(s => `<span class="chip">${esc(s.zone_label)} · ${(s.start_time||'').slice(0,5)}–${(s.end_time||'').slice(0,5)}</span>`).join("")}</div>
+          </div>
+        </div>
+        <div class="chip-row" style="margin-top:10px;">
+          <button class="chip" onclick="editCampaign('${c.id}')">✏️ Modifier</button>
+          <button class="chip" onclick="toggleCampaignActive('${c.id}','${st}')">${inactive?'✅ Réactiver':'⏸ Désactiver'}</button>
+          <button class="chip" style="color:#b91c1c;" onclick="deleteCampaign('${c.id}')">🗑 Supprimer</button>
+        </div>
+      </div>`;
+      }).join("")}
     <button class="btn btn-secondary" style="margin-top:16px;" onclick="setCampaignsView('none')">← Retour</button>
   </div>`;
 }
+
+async function editCampaign(id){
+  const c = (state.pressingCampaigns||[]).find(x => x.id === id);
+  if(!c){ alert("Campagne introuvable"); return; }
+  state.draftCampaign = {
+    id: c.id,
+    title: c.title || "",
+    message: c.message || "",
+    campaign_date: c.campaign_date || "",
+    mode: c.mode || "domicile",
+    slots: (c.campaign_slots && c.campaign_slots.length) ? c.campaign_slots.map(s => ({
+      zone_label: s.zone_label || "",
+      start_time: (s.start_time||"07:00").slice(0,5),
+      end_time: (s.end_time||"09:00").slice(0,5)
+    })) : [{zone_label:"",start_time:"07:00",end_time:"09:00"}]
+  };
+  state.campaignsView = "new";
+  render();
+}
+
+async function toggleCampaignActive(id, current){
+  const next = (current === "published" || !current) ? "inactive" : "published";
+  const { error } = await sb.from("campaigns").update({ status: next }).eq("id", id);
+  if(error){ alert("Impossible de changer le statut : " + error.message); return; }
+  await loadPressingCampaigns();
+  render();
+}
+
+async function deleteCampaign(id){
+  if(!confirm("Supprimer cette campagne ?")) return;
+  // d'abord slots
+  try{ await sb.from("campaign_slots").delete().eq("campaign_id", id); }catch(e){}
+  const { error } = await sb.from("campaigns").delete().eq("id", id);
+  if(error){
+    // repli : marquer cancelled
+    await sb.from("campaigns").update({ status: "cancelled" }).eq("id", id);
+  }
+  await loadPressingCampaigns();
+  render();
+}
+
 function renderNewCampaignForm(){
   const d = state.draftCampaign;
   return `<div class="screen">
-    <div class="header-title" style="margin-bottom:12px;">Nouvelle campagne de ramassage</div>
+    <div class="header-title" style="margin-bottom:12px;">${state.draftCampaign?.id ? "Modifier la campagne" : "Nouvelle campagne de ramassage"}</div>
     <div class="field"><div class="field-label">Titre</div><input type="text" id="campTitle" value="${esc(d.title)}" placeholder="Ex : Ramassage du quartier" /></div>
     <div class="field"><div class="field-label">Message aux clients</div><input type="text" id="campMessage" value="${esc(d.message)}" placeholder="Ex : Ramassage prévu mercredi..." /></div>
     <div class="field"><div class="field-label">Date</div><input type="date" id="campDate" value="${esc(d.campaign_date)}" /></div>
@@ -2807,24 +2930,36 @@ async function publishCampaign(){
   }
   state._publishingCampaign = true;
   try{
-    const payload = {
-      pressing_id: pid,
-      created_by: state.profile.id,
-      title, message, campaign_date, mode, status: "published"
-    };
-    const { data: camp, error } = await sb.from("campaigns").insert(payload).select("id").single();
-    if(error) throw error;
-    if(slots.length && camp?.id){
+    const editId = state.draftCampaign?.id || null;
+    let campId = editId;
+    if(editId){
+      const { error } = await sb.from("campaigns").update({
+        title, message, campaign_date, mode, status: "published"
+      }).eq("id", editId);
+      if(error) throw error;
+      try{ await sb.from("campaign_slots").delete().eq("campaign_id", editId); }catch(e){}
+    } else {
+      const payload = {
+        pressing_id: pid,
+        created_by: state.profile.id,
+        title, message, campaign_date, mode, status: "published"
+      };
+      const { data: camp, error } = await sb.from("campaigns").insert(payload).select("id").single();
+      if(error) throw error;
+      campId = camp?.id;
+    }
+    if(slots.length && campId){
       const { error: e2 } = await sb.from("campaign_slots").insert(
-        slots.map(s => ({ campaign_id: camp.id, zone_label: s.zone_label, start_time: s.start_time, end_time: s.end_time }))
+        slots.map(s => ({ campaign_id: campId, zone_label: s.zone_label, start_time: s.start_time, end_time: s.end_time }))
       );
       if(e2) throw e2;
     }
     await loadPressingCampaigns();
     state._publishingCampaign = false;
+    state.draftCampaign = null;
     state.campaignsView = "list";
     render();
-    alert("Campagne publiée.");
+    alert(editId ? "Campagne mise à jour." : "Campagne publiée.");
   } catch(e){
     state._publishingCampaign = false;
     const msg = e.message || String(e);
@@ -3969,6 +4104,87 @@ function renderAdminPressingDetail(p){
 // =============================== PWA & WEB PUSH NATIF ===============================
 // Clé publique VAPID (à apparier avec VAPID_PRIVATE_KEY côté Edge Function)
 
+
+async function saveFcmToken(token){
+  if(!token || !state.profile?.id) return;
+  try{
+    await sb.from("fcm_tokens").upsert({
+      user_id: state.profile.id,
+      token: token,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "user_id,token" });
+  } catch(e){
+    // repli insert simple
+    try{
+      await sb.from("fcm_tokens").delete().eq("user_id", state.profile.id).eq("token", token);
+      await sb.from("fcm_tokens").insert({ user_id: state.profile.id, token: token });
+    } catch(e2){ console.warn("saveFcmToken", e2.message); }
+  }
+}
+
+async function enableFcmPush(){
+  const result = { ok:false, error:null, token:null };
+  try{
+    if(typeof firebase === "undefined"){
+      result.error = "Firebase non chargé — recharge la page";
+      return result;
+    }
+    if(!firebase.messaging){
+      result.error = "Firebase Messaging indisponible sur ce navigateur";
+      return result;
+    }
+    if(typeof Notification !== "undefined" && Notification.permission === "denied"){
+      result.error = "Notifications bloquées dans les réglages du téléphone";
+      return result;
+    }
+    if(typeof Notification !== "undefined" && Notification.permission !== "granted"){
+      const perm = await Notification.requestPermission();
+      if(perm !== "granted"){
+        result.error = "Permission refusée";
+        return result;
+      }
+    }
+    // Enregistrer le SW FCM
+    let reg = null;
+    try{
+      reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
+      await navigator.serviceWorker.ready;
+    } catch(e){
+      console.warn("FCM SW register", e.message);
+    }
+    if(!window._firebaseApp){
+      window._firebaseApp = firebase.initializeApp(window.FIREBASE_CONFIG);
+    }
+    const messaging = firebase.messaging();
+    const token = await messaging.getToken({
+      vapidKey: window.FIREBASE_VAPID_KEY,
+      serviceWorkerRegistration: reg || undefined
+    });
+    if(!token){
+      result.error = "Pas de token FCM — réessaie ou installe la PWA";
+      return result;
+    }
+    result.token = token;
+    await saveFcmToken(token);
+    try{
+      messaging.onMessage((payload) => {
+        const title = payload.notification?.title || payload.data?.title || "Pressing Connecté";
+        const body = payload.notification?.body || payload.data?.body || "";
+        if(typeof Notification !== "undefined" && Notification.permission === "granted"){
+          new Notification(title, { body, icon: "/icon-192.png" });
+        }
+      });
+    } catch(e){}
+    result.ok = true;
+    state.pushEnabled = true;
+    state.pushBannerDismissed = true;
+    try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+  } catch(e){
+    result.error = e.message || String(e);
+  }
+  return result;
+}
+
 const ONESIGNAL_APP_ID = "14ed4064-0bcf-4a8a-b6c7-41741b57a283";
 
 async function waitOneSignal(timeoutMs){
@@ -3994,21 +4210,59 @@ async function oneSignalLoginUser(userId){
 }
 
 async function oneSignalRequestPermission(){
-  const result = { ok:false, error:null };
+  const result = { ok:false, error:null, subscriptionId:null, optedIn:false };
   try{
-    const OS = await waitOneSignal(8000);
-    if(!OS){ result.error = "OneSignal non chargé"; return result; }
-    if(typeof OS.Notifications !== "undefined" && OS.Notifications.requestPermission){
-      await OS.Notifications.requestPermission(true);
-    } else if(typeof OS.registerForPushNotifications === "function"){
-      await OS.registerForPushNotifications();
-    } else if(typeof Notification !== "undefined"){
-      await Notification.requestPermission();
+    const OS = await waitOneSignal(10000);
+    if(!OS){ result.error = "OneSignal non chargé — recharge la page"; return result; }
+
+    // 1) Permission navigateur
+    if(typeof Notification !== "undefined" && Notification.permission === "denied"){
+      result.error = "Notifications bloquées dans les réglages du téléphone / navigateur";
+      return result;
     }
-    result.ok = true;
-    state.pushEnabled = true;
-    state.pushBannerDismissed = true;
-    try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+    if(typeof Notification !== "undefined" && Notification.permission !== "granted"){
+      const perm = await Notification.requestPermission();
+      if(perm !== "granted"){
+        result.error = "Permission refusée";
+        return result;
+      }
+    }
+
+    // 2) OneSignal opt-in
+    try{
+      if(OS.Notifications?.requestPermission){
+        await OS.Notifications.requestPermission(true);
+      }
+    }catch(e){}
+    try{
+      if(OS.User?.PushSubscription?.optIn){
+        await OS.User.PushSubscription.optIn();
+      }
+    }catch(e){}
+
+    // 3) Lier le compte (external_id = profile.id)
+    if(state.profile?.id){
+      try{
+        if(typeof OS.login === "function") await OS.login(String(state.profile.id));
+        else if(OS.User?.login) await OS.User.login(String(state.profile.id));
+      }catch(e){ console.warn("OS login", e.message); }
+    }
+
+    await new Promise(r => setTimeout(r, 800));
+
+    const subId = OS.User?.PushSubscription?.id || null;
+    const opted = !!(OS.User?.PushSubscription?.optedIn);
+    result.subscriptionId = subId;
+    result.optedIn = opted;
+    result.ok = !!(subId || opted || (typeof Notification !== "undefined" && Notification.permission === "granted"));
+
+    if(result.ok){
+      state.pushEnabled = true;
+      state.pushBannerDismissed = true;
+      try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
+    } else {
+      result.error = "Abonnement OneSignal incomplet — réessaie ou installe la PWA";
+    }
   } catch(e){
     result.error = e.message || String(e);
   }
@@ -4142,17 +4396,17 @@ async function ensurePushSubscription(forceResub){
 
 async function enablePushFromUI(){
   try{
-    // 1) OneSignal (push écran verrouillé / app fermée)
-    const osRes = await oneSignalRequestPermission();
-    if(state.profile?.id){
-      await oneSignalLoginUser(state.profile.id);
-    }
-    // 2) Ancien abonnement VAPID (repli)
+    // 1) Firebase Cloud Messaging (prioritaire)
+    const fcm = await enableFcmPush();
+    // 2) Repli OneSignal + ancien VAPID
+    try{ await oneSignalRequestPermission(); }catch(e){}
+    try{ if(state.profile?.id) await oneSignalLoginUser(state.profile.id); }catch(e){}
     try{ await ensurePushSubscription(true); }catch(e){}
-    if(osRes.ok){
-      alert("Notifications activées.\nTu pourras recevoir des alertes même écran verrouillé (Android / PWA).");
+    if(fcm.ok){
+      alert("Notifications FCM activées.\nToken: " + String(fcm.token).slice(0,16) + "…\n" +
+        "Réglages téléphone → Chrome / icône du site → Notifications = ON (son activé).");
     } else {
-      alert("Permission : " + (osRes.error || "vérifie les réglages du navigateur."));
+      alert("FCM: " + (fcm.error || "échec") + "\nRéessaie après avoir installé la PWA (Ajouter à l'écran d'accueil).");
     }
     state.pushBannerDismissed = true;
     try{ localStorage.setItem("pc_push_ok", "1"); }catch(e){}
@@ -4307,7 +4561,7 @@ clientGo = async function(screen){ pushNav(); return _clientGo(screen); };
 const _bookingStep = bookingStep;
 bookingStep = function(n){ if(n > (state.booking?.step||0)) pushNav(); return _bookingStep(n); };
 const _setCampaignsView = setCampaignsView;
-setCampaignsView = function(v){ if(v !== "none") pushNav(); return _setCampaignsView(v); };
+setCampaignsView = async function(v){ if(v !== "none") pushNav(); return await _setCampaignsView(v); };
 const _openPressingConfig = openPressingConfig;
 openPressingConfig = async function(){ pushNav(); return _openPressingConfig(); };
 const _pressingSelect = pressingSelect;
