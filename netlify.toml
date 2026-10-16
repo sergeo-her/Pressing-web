@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+
+# Réduit les injections Netlify côté site
+[build.processing]
+  skip_processing = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
