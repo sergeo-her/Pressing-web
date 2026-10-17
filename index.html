@@ -4160,27 +4160,44 @@ async function enableFcmPush(){
         return result;
       }
     }
-    // Enregistrer le SW FCM
-    let reg = null;
+
+    // Supprimer les anciens SW (OneSignal / sw.js) qui provoquent SENDER_ID_MISMATCH
     try{
-      reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
-      await navigator.serviceWorker.ready;
-    } catch(e){
-      console.warn("FCM SW register", e.message);
-    }
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for(const r of regs){
+        const url = r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || "";
+        if(!url.includes("firebase-messaging-sw.js")){
+          try{ await r.unregister(); }catch(e){}
+        }
+      }
+    } catch(e){ console.warn("SW cleanup", e.message); }
+
+    let reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
+    try{ await navigator.serviceWorker.ready; }catch(e){}
+    // Attendre que le SW FCM contrôle la page
+    await new Promise(r => setTimeout(r, 600));
+
     if(!window._firebaseApp){
       window._firebaseApp = firebase.initializeApp(window.FIREBASE_CONFIG);
     }
     const messaging = firebase.messaging();
+    // Force un token neuf
+    try{ await messaging.deleteToken(); }catch(e){}
     const token = await messaging.getToken({
       vapidKey: window.FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: reg || undefined
+      serviceWorkerRegistration: reg
     });
     if(!token){
       result.error = "Pas de token FCM — réessaie ou installe la PWA";
       return result;
     }
     result.token = token;
+    // Remplace tous les tokens de cet utilisateur
+    try{
+      if(state.profile?.id){
+        await sb.from("fcm_tokens").delete().eq("user_id", state.profile.id);
+      }
+    } catch(e){}
     await saveFcmToken(token);
     try{
       messaging.onMessage((payload) => {
