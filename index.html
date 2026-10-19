@@ -1473,6 +1473,9 @@ function renderClientHome(){
     </div>
   </div>
   ${renderCampaignsForClient()}
+  <div class="screen" style="padding-top:4px;">
+    <button type="button" class="wa-btn" onclick="whatsAppPressingFromClient()">💬 Écrire au pressing sur WhatsApp</button>
+  </div>
   ${renderReviewsForClient()}
   ${renderClientProfileCard()}
   `;
@@ -2311,6 +2314,40 @@ function copyPressingInviteLink(){
     navigator.clipboard.writeText(link).then(() => alert("Lien copié.")).catch(() => prompt("Copiez ce lien :", link));
   } else prompt("Copiez ce lien :", link);
 }
+
+function waDigits(phone){
+  if(!phone) return "";
+  let d = String(phone).replace(/\D/g, "");
+  if(d.startsWith("00")) d = d.slice(2);
+  // Cameroun: 9 chiffres locaux → préfixe 237
+  if(d.length === 9 && (d.startsWith("6") || d.startsWith("2"))) d = "237" + d;
+  return d;
+}
+function openWhatsApp(phone, message){
+  const dig = waDigits(phone);
+  const q = encodeURIComponent(message || "");
+  const url = dig ? ("https://wa.me/" + dig + "?text=" + q) : ("https://wa.me/?text=" + q);
+  window.open(url, "_blank");
+}
+function whatsAppClientOrder(orderId){
+  const order = (state.pressingOrders || []).find(o => o.id === orderId);
+  if(!order){ alert("Commande introuvable"); return; }
+  const phone = order.customer?.phone || "";
+  if(!phone){ alert("Ce client n'a pas de numéro enregistré."); return; }
+  const name = order.customer?.full_name || "Client";
+  const num = order.order_number || "";
+  const st = (typeof STATUS_LABELS !== "undefined" && STATUS_LABELS[order.order_status]) ? STATUS_LABELS[order.order_status] : (order.order_status || "");
+  const msg = "Bonjour " + name + ",\n\nConcernant votre commande " + num + " (" + st + ") chez " + (state.myPressing?.name || "notre pressing") + ".\n\n";
+  openWhatsApp(phone, msg);
+}
+function whatsAppPressingFromClient(){
+  const phone = state.clientConfig?.pressing?.whatsapp || state.clientConfig?.pressing?.phone || "";
+  if(!phone){ alert("Numéro du pressing indisponible."); return; }
+  const name = state.profile?.full_name || "";
+  const msg = "Bonjour, je suis " + name + ", client Pressing Connecté. ";
+  openWhatsApp(phone, msg);
+}
+
 function sharePressingInviteWhatsApp(){
   const code = state.myPressing?.invite_code;
   if(!code){ alert("Générez d'abord un code."); return; }
@@ -2423,6 +2460,7 @@ function renderPressingOrderDetail(order){
 
       <div class="card"><div style="font-size:14px;margin-bottom:4px;">Statut actuel</div><div style="font-size:14px;font-weight:700;color:var(--teal);">${STATUS_LABELS[order.order_status]}</div></div>
       <button class="btn btn-secondary" style="margin-top:4px;" onclick="downloadOrderInvoice('${order.id}')">📄 Télécharger la facture</button>
+      ${order.customer?.phone ? `<button class="btn btn-secondary" style="margin-top:4px;" onclick="whatsAppClientOrder('${order.id}')">💬 WhatsApp client</button>` : ""}
       ${!["termine","annule"].includes(order.order_status) ? `<button class="btn btn-primary" onclick="pressingAdvance('${order.id}')">Faire avancer → ${STATUS_LABELS[nextStatus(order.order_status)]}</button>` : ""}
     </div>
   </div>`;
