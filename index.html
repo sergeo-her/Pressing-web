@@ -1473,9 +1473,14 @@ function renderClientHome(){
     </div>
   </div>
   ${renderCampaignsForClient()}
-  <div class="screen" style="padding-top:4px;">
+  ${hasPass ? `<div class="screen" style="padding-top:4px;">
     <button type="button" class="wa-btn" onclick="whatsAppPressingFromClient()">💬 Écrire au pressing sur WhatsApp</button>
-  </div>
+    <p style="font-size:11px;color:var(--muted);margin:6px 2px 0;line-height:1.4;">Ouvre WhatsApp avec un message déjà prêt vers ton pressing. Vérifie le texte puis appuie sur <b>Envoyer</b>.</p>
+  </div>` : `<div class="screen" style="padding-top:4px;">
+    <div class="card" style="font-size:13px;color:var(--muted);">💬 WhatsApp pressing réservé aux clients avec <b>Pass actif</b>.
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="clientGo('pass')">Voir mon Pass</button>
+    </div>
+  </div>`}
   ${renderReviewsForClient()}
   ${renderClientProfileCard()}
   `;
@@ -1514,11 +1519,20 @@ async function submitReview(){
 }
 function renderCampaignsForClient(){
   if(!state.clientCampaigns || state.clientCampaigns.length===0) return "";
+  if(!clientHasActivePass(state.profile)){
+    return `<div class="screen" style="padding-top:16px;padding-bottom:0;">
+      <div class="card" style="border-color:#86efac;">
+        <div style="font-weight:700;margin-bottom:6px;">📢 Collectes programmées</div>
+        <p style="font-size:13px;color:var(--muted);margin:0 0 10px;">Accessible avec un <b>Pass actif</b> (crédits ou illimité).</p>
+        <button class="btn btn-primary" onclick="clientGo('pass')">Activer / recharger mon Pass</button>
+      </div>
+    </div>`;
+  }
   return `<div class="screen" style="padding-top:16px;padding-bottom:0;">
     <div style="border:2px solid #0D9F4F;border-radius:16px;padding:14px;background:linear-gradient(180deg,#E8F8EF 0%,#fff 48%);margin-bottom:8px;">
       <div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#0A7A3C;margin-bottom:4px;">Proposé par ton pressing</div>
       <div style="font-size:16px;font-weight:800;color:var(--ink);margin-bottom:4px;">📢 Collectes & livraisons programmées</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.45;">Créneaux organisés par le pressing (quartier + heure). Distinct de ta demande personnalisée ci-dessus.</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.45;">Créneaux organisés par le pressing (quartier + heure). Distinct de ta demande personnalisée ci-dessus. <b>Pass requis</b>.</p>
       ${state.clientCampaigns.map(c => {
         const isDelivery = /livraison/i.test(c.title||"") || c.mode === "livraison";
         const modeLabel = isDelivery ? "Livraison" : (c.mode==="domicile" ? "Collecte à domicile" : "Collecte — point RDV");
@@ -1574,7 +1588,12 @@ async function confirmCampaignSlot(campaignId, slotId, mode, date){
     state.confirmedCampaigns = state.confirmedCampaigns || {};
     state.confirmedCampaigns[campaignId] = slotId;
     await loadClientOrders();
-    alert("Créneau confirmé. Le pressing a reçu ta demande.");
+    const camp = (state.clientCampaigns||[]).find(c => c.id === campaignId);
+    const slot = (camp?.campaign_slots||[]).find(s => s.id === slotId);
+    const zone = slot ? ((slot.zone_label||"") + " " + String(slot.start_time||"").slice(0,5)) : "";
+    if(confirm("Créneau de collecte programmée confirmé.\n\nOuvrir WhatsApp pour prévenir le pressing ?\n(Message déjà prêt — tu valides avec Envoyer)")){
+      try{ whatsAppCampaignConfirmToPressing(camp?.title||"", date, zone); }catch(e){}
+    }
     render();
   } catch(e){ alert("Erreur : " + (e.message || e)); }
 }
@@ -1772,6 +1791,11 @@ async function bookingConfirm(){
     }
     await loadClientOrders();
     state.activeOrderId = order.id; state.bookingSubmitting = false;
+    try{
+      if(clientHasActivePass(state.profile) && confirm("Réservation enregistrée.\n\nOuvrir WhatsApp pour envoyer la confirmation au pressing ?\n(Message déjà prêt — tu valides avec Envoyer)")){
+        whatsAppOrderConfirmToPressing(order);
+      }
+    }catch(e){}
     setState({ clientScreen: "track" });
   } catch(e){ setState({ bookingSubmitting:false, bookingError: e.message || "Une erreur est survenue." }); }
 }
@@ -2319,7 +2343,6 @@ function waDigits(phone){
   if(!phone) return "";
   let d = String(phone).replace(/\D/g, "");
   if(d.startsWith("00")) d = d.slice(2);
-  // Cameroun: 9 chiffres locaux → préfixe 237
   if(d.length === 9 && (d.startsWith("6") || d.startsWith("2"))) d = "237" + d;
   return d;
 }
@@ -2328,6 +2351,10 @@ function openWhatsApp(phone, message){
   const q = encodeURIComponent(message || "");
   const url = dig ? ("https://wa.me/" + dig + "?text=" + q) : ("https://wa.me/?text=" + q);
   window.open(url, "_blank");
+}
+/** Message prérempli sans destinataire : le pressing choisit contact / liste de diffusion / groupe */
+function whatsAppBroadcast(message){
+  openWhatsApp("", message);
 }
 function whatsAppClientOrder(orderId){
   const order = (state.pressingOrders || []).find(o => o.id === orderId);
@@ -2341,10 +2368,88 @@ function whatsAppClientOrder(orderId){
   openWhatsApp(phone, msg);
 }
 function whatsAppPressingFromClient(){
+  if(!clientHasActivePass(state.profile)){
+    alert("Active ou recharge ton Pass pour contacter le pressing sur WhatsApp.");
+    clientGo("pass");
+    return;
+  }
   const phone = state.clientConfig?.pressing?.whatsapp || state.clientConfig?.pressing?.phone || "";
   if(!phone){ alert("Numéro du pressing indisponible."); return; }
   const name = state.profile?.full_name || "";
-  const msg = "Bonjour, je suis " + name + ", client Pressing Connecté. ";
+  const msg = "Bonjour, je suis " + name + ", client Pressing Connecté (Pass actif). ";
+  openWhatsApp(phone, msg);
+}
+function whatsAppCampaignNetwork(campaignId){
+  const c = (state.pressingCampaigns || []).find(x => x.id === campaignId);
+  if(!c){ alert("Campagne introuvable"); return; }
+  const pname = state.myPressing?.name || "notre pressing";
+  const slots = (c.campaign_slots || []).map(s =>
+    "• " + (s.zone_label || "Quartier") + " " + String(s.start_time||"").slice(0,5) + "–" + String(s.end_time||"").slice(0,5)
+  ).join("\n");
+  const msg = "📢 " + pname + " — Collecte programmée\n\n" +
+    (c.title || "Ramassage") + "\n📅 " + (c.campaign_date || "") + "\n\n" +
+    (c.message ? (c.message + "\n\n") : "") +
+    (slots ? ("Créneaux :\n" + slots + "\n\n") : "") +
+    "Confirmez dans l'appli Pressing Connecté (Pass requis).\nMerci !";
+  whatsAppBroadcast(msg);
+}
+function whatsAppConfigServices(){
+  const list = (state.myServices || []).filter(s => s.is_active !== false);
+  const pname = state.myPressing?.name || "Notre pressing";
+  let body = "🧺 " + pname + " — Services & tarifs\n\n";
+  if(!list.length) body += "Nouveaux tarifs disponibles dans Pressing Connecté.\n";
+  else list.forEach(s => { body += "• " + (s.name||"Service") + " — " + (s.price!=null?s.price:"?") + " FCFA / " + (s.unit||"unité") + "\n"; });
+  body += "\nRéservez via Pressing Connecté.";
+  whatsAppBroadcast(body);
+}
+function whatsAppConfigSlots(kind){
+  const slots = kind === "delivery" ? (state.myDeliverySlots || []) : (state.mySlots || []);
+  const active = slots.filter(s => s.is_active !== false);
+  const pname = state.myPressing?.name || "Notre pressing";
+  const title = kind === "delivery" ? "Créneaux de livraison" : "Créneaux de collecte";
+  let body = "📍 " + pname + " — " + title + "\n\n";
+  if(!active.length) body += "Nouveaux créneaux dans Pressing Connecté.\n";
+  else active.forEach(s => {
+    body += "• " + (s.label||"Créneau") + (s.zone_label?(" — "+s.zone_label):"") +
+      " " + String(s.start_time||"").slice(0,5) + "–" + String(s.end_time||"").slice(0,5) + "\n";
+  });
+  body += "\nRéservez via Pressing Connecté (Pass actif).";
+  whatsAppBroadcast(body);
+}
+function whatsAppOrderConfirmToPressing(order){
+  const phone = state.clientConfig?.pressing?.whatsapp || state.clientConfig?.pressing?.phone || "";
+  if(!phone || !order) return;
+  const name = state.profile?.full_name || "Client";
+  const msg = "✅ Confirmation réservation\n\nClient : " + name + "\nN° " + (order.order_number||"") +
+    "\nDate collecte : " + (order.pickup_date||"—") +
+    "\n\nEnvoyé depuis Pressing Connecté.";
+  openWhatsApp(phone, msg);
+}
+function whatsAppCampaignConfirmToPressing(campaignTitle, date, zone){
+  const phone = state.clientConfig?.pressing?.whatsapp || state.clientConfig?.pressing?.phone || "";
+  if(!phone) return;
+  const name = state.profile?.full_name || "Client";
+  const msg = "✅ Confirmation collecte programmée\n\nClient : " + name +
+    "\nCampagne : " + (campaignTitle||"") +
+    "\nDate : " + (date||"") +
+    (zone ? ("\nCréneau : " + zone) : "") +
+    "\n\nEnvoyé depuis Pressing Connecté.";
+  openWhatsApp(phone, msg);
+}
+function whatsAppStatusToClient(orderId){
+  const order = (state.pressingOrders || []).find(o => o.id === orderId);
+  if(!order){ alert("Commande introuvable"); return; }
+  const phone = order.customer?.phone || "";
+  if(!phone){ alert("Pas de numéro client."); return; }
+  const name = order.customer?.full_name || "Client";
+  const st = STATUS_LABELS[order.order_status] || order.order_status || "";
+  const del = order.deliverySlot
+    ? ((order.deliverySlot.zone_label||order.deliverySlot.label||"") + " " + String(order.deliverySlot.start_time||"").slice(0,5) + "–" + String(order.deliverySlot.end_time||"").slice(0,5))
+    : "à planifier";
+  const msg = "Bonjour " + name + ",\n\nMise à jour commande " + (order.order_number||"") +
+    "\nStatut : " + st +
+    "\nLivraison : " + del +
+    "\n\n— " + (state.myPressing?.name || "Votre pressing");
   openWhatsApp(phone, msg);
 }
 
@@ -2460,7 +2565,10 @@ function renderPressingOrderDetail(order){
 
       <div class="card"><div style="font-size:14px;margin-bottom:4px;">Statut actuel</div><div style="font-size:14px;font-weight:700;color:var(--teal);">${STATUS_LABELS[order.order_status]}</div></div>
       <button class="btn btn-secondary" style="margin-top:4px;" onclick="downloadOrderInvoice('${order.id}')">📄 Télécharger la facture</button>
-      ${order.customer?.phone ? `<button class="btn btn-secondary" style="margin-top:4px;" onclick="whatsAppClientOrder('${order.id}')">💬 WhatsApp client</button>` : ""}
+      ${order.customer?.phone ? `<button class="btn btn-secondary" style="margin-top:4px;" onclick="whatsAppClientOrder('${order.id}')">💬 WhatsApp client</button>
+      <p style="font-size:11px;color:var(--muted);margin:4px 0 0;line-height:1.4;">Contacte ce client : message prérempli avec le n° de commande. Complète si besoin puis Envoyer.</p>` : ""}
+      ${order.customer?.phone ? `<button class="btn btn-secondary" style="margin-top:8px;" onclick="whatsAppStatusToClient('${order.id}')">💬 Notifier statut / créneau WhatsApp</button>
+      <p style="font-size:11px;color:var(--muted);margin:4px 0 0;line-height:1.4;">Informe le client du <b>statut actuel</b> et du créneau de livraison. Idéal après une mise à jour de commande.</p>` : ""}
       ${!["termine","annule"].includes(order.order_status) ? `<button class="btn btn-primary" onclick="pressingAdvance('${order.id}')">Faire avancer → ${STATUS_LABELS[nextStatus(order.order_status)]}</button>` : ""}
     </div>
   </div>`;
@@ -2756,7 +2864,9 @@ function renderPressingConfig(){
       </div>
     </div>
 
-    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">Services & tarifs</div>
+    <div class="header-row" style="margin:20px 0 4px;"><div style="font-size:14px;font-weight:700;">Services & tarifs</div>
+      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:11px;" type="button" onclick="whatsAppConfigServices()">💬 WhatsApp réseau</button></div>
+    <p style="font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.4;">Partage la liste des services et prix à ton réseau : message prêt, tu choisis destinataires / groupe dans WhatsApp.</p>
     ${state.myServices.length===0 ? `<p style="font-size:12px;color:var(--mutedLight);margin-bottom:8px;">Aucun service. Ajoute-en un ci-dessous.</p>` :
       state.myServices.map(s => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
         <div><div style="font-size:14px;font-weight:700;">${esc(s.name)}</div><div style="font-size:12px;color:var(--muted);">${fcfa(s.price)} / ${esc(s.unit)}</div></div>
@@ -2772,12 +2882,16 @@ function renderPressingConfig(){
       <button class="btn btn-primary" type="button" onclick="addService()" style="margin-top:10px;">Ajouter le service</button>
     </div>
 
-    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">📥 Créneaux de collecte par quartier</div>
+    <div class="header-row" style="margin:20px 0 4px;"><div style="font-size:14px;font-weight:700;">📥 Créneaux de collecte par quartier</div>
+      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:11px;" type="button" onclick="whatsAppConfigSlots('pickup')">💬 WhatsApp réseau</button></div>
+    <p style="font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.4;">Annonce tes créneaux de collecte fixes au réseau (texte prérempli → liste de diffusion ou groupe).</p>
     <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Le client voit ces créneaux et coche celui qui lui convient pour venir chercher son linge.</p>
     ${renderSlotList(state.mySlots, "collecte")}
     ${renderSlotForm("pickup", state.draftSlot)}
 
-    <div style="font-size:14px;font-weight:700;margin:20px 0 8px;">📤 Créneaux de livraison par quartier</div>
+    <div class="header-row" style="margin:20px 0 4px;"><div style="font-size:14px;font-weight:700;">📤 Créneaux de livraison par quartier</div>
+      <button class="btn btn-secondary" style="width:auto;padding:6px 10px;margin:0;font-size:11px;" type="button" onclick="whatsAppConfigSlots('delivery')">💬 WhatsApp réseau</button></div>
+    <p style="font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.4;">Annonce tes créneaux de livraison fixes au réseau (même principe : WhatsApp ouvre le texte, tu envoies au groupe).</p>
     <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Le client coche le créneau qui lui convient pour la remise de son linge propre.</p>
     ${renderSlotList(state.myDeliverySlots, "livraison")}
     ${renderSlotForm("delivery", state.draftDeliverySlot)}
@@ -2884,10 +2998,12 @@ function renderPressingCampaignsList(){
           </div>
         </div>
         <div class="chip-row" style="margin-top:10px;">
+          <button class="chip" onclick="whatsAppCampaignNetwork('${c.id}')">💬 WhatsApp réseau</button>
           <button class="chip" onclick="editCampaign('${c.id}')">✏️ Modifier</button>
           <button class="chip" onclick="toggleCampaignActive('${c.id}','${st}')">${inactive?'✅ Réactiver':'⏸ Désactiver'}</button>
           <button class="chip" style="color:#b91c1c;" onclick="deleteCampaign('${c.id}')">🗑 Supprimer</button>
         </div>
+        <p style="font-size:11px;color:var(--muted);margin:8px 0 0;line-height:1.4;">💬 <b>WhatsApp réseau</b> : annonce préremplie (titre, date, créneaux). Ouvre WhatsApp puis choisis ta liste de diffusion ou ton groupe clients.</p>
       </div>`;
       }).join("")}
     <button class="btn btn-secondary" style="margin-top:16px;" onclick="setCampaignsView('none')">← Retour</button>
@@ -3014,6 +3130,9 @@ async function publishCampaign(){
     state.campaignsView = "list";
     render();
     alert(editId ? "Campagne mise à jour." : "Campagne publiée.");
+    if(campId && confirm("Campagne prête.\n\nOuvrir WhatsApp pour annoncer la collecte à ton réseau ?\nTu choisiras ensuite ta liste de diffusion ou ton groupe.")){
+      try{ whatsAppCampaignNetwork(campId); }catch(e){}
+    }
   } catch(e){
     state._publishingCampaign = false;
     const msg = e.message || String(e);
