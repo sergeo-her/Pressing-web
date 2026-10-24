@@ -420,7 +420,45 @@ function computeSubStatus(sub){
 }
 
 // ---- Pass client helpers ----
+/** Pass payant activé côté plateforme ? (admin) — false = tout gratuit pour les clients */
+
+async function loadClientPassFlag(){
+  try{
+    const { data } = await sb.from("platform_settings").select("value").eq("key","client_pass_enabled").maybeSingle();
+    if(data && data.value != null){
+      const v = data.value;
+      // value peut être bool, string, ou {enabled:bool}
+      if(typeof v === "boolean") state.clientPassEnabled = v;
+      else if(typeof v === "object" && v && "enabled" in v) state.clientPassEnabled = !!v.enabled;
+      else if(v === "true" || v === true || v === 1 || v === "1") state.clientPassEnabled = true;
+      else if(v === "false" || v === false || v === 0 || v === "0") state.clientPassEnabled = false;
+      else state.clientPassEnabled = !!v;
+    } else {
+      state.clientPassEnabled = false; // défaut : gratuit
+    }
+  } catch(e){
+    state.clientPassEnabled = false;
+  }
+}
+async function saveClientPassFlag(enabled){
+  const value = { enabled: !!enabled };
+  const { data: existing } = await sb.from("platform_settings").select("id").eq("key","client_pass_enabled").maybeSingle();
+  if(existing){
+    const { error } = await sb.from("platform_settings").update({ value, updated_at: new Date().toISOString() }).eq("key","client_pass_enabled");
+    if(error) throw error;
+  } else {
+    const { error } = await sb.from("platform_settings").insert({ key:"client_pass_enabled", value });
+    if(error) throw error;
+  }
+  state.clientPassEnabled = !!enabled;
+}
+
+function isClientPassRequired(){
+  return !!state.clientPassEnabled;
+}
 function clientHasActivePass(profile){
+  // Mode gratuit : toutes les fonctions client sont ouvertes
+  if(!isClientPassRequired()) return true;
   if(!profile) return false;
   if(profile.pass_type === "unlimited" && profile.pass_expiration){
     return new Date(profile.pass_expiration) > new Date();
@@ -458,6 +496,7 @@ async function ensureClientPass(profile){
   return profile;
 }
 async function deductPassCredit(){
+  if(!isClientPassRequired()) return; // mode gratuit
   const p = state.profile;
   if(!p) return false;
   // Illimité actif : pas de décompte
@@ -529,6 +568,7 @@ async function loadPassSettings(){
   } catch(e){
     state.pressingPlans = JSON.parse(JSON.stringify(PLAN_DEFAULTS));
   }
+  try{ await loadClientPassFlag(); }catch(e){}
 }
 
 async function savePressingPlansConfig(plansConfig){
@@ -611,6 +651,8 @@ function freshState(){
     orders:[], activeOrderId:null, booking:null, bookingError:null, bookingSubmitting:false,
     clientCampaigns:[], confirmedCampaigns:{}, featuredReviews:[], reviewFormOpen:false, draftReview:null,
     passSelectedPack:null, passRequestNote:"", passRequestSubmitting:false, passRequestSuccess:null, passRequestError:null,
+    clientPassEnabled:false, // false = mode gratuit client (Pass masqué)
+
     passPacks:null, adminPassPricesEdit:false, adminPassPriceDraft:null, adminPassPriceMsg:null,
 
     myPressing:null, pressingOrders:[], pressingAgents:[], pressingSelectedOrderId:null, realtimeChannel:null,
@@ -1338,13 +1380,17 @@ async function loadClientCampaigns(pressingId){
 function renderClientApp(){
   if(state.clientScreen === "choosePressing" || state.clientScreen === "joinPressing") return renderJoinPressing();
   if(state.reviewFormOpen) return renderReviewForm();
-  if(state.clientScreen === "pass") return renderTopTabs() + renderPassScreen() + renderBottomNav();
+  if(state.clientScreen === "pass"){
+    if(!isClientPassRequired()){ state.clientScreen = "home"; }
+    else return renderTopTabs() + renderPassScreen() + renderBottomNav();
+  }
   const map = { home:renderClientHome, book:renderBookingFlow, track:renderTracking, history:renderHistory };
   const fn = map[state.clientScreen] || renderClientHome;
   return renderTopTabs() + fn() + renderBottomNav();
 }
 function renderTopTabs(){
-  const items = [["home","Accueil"],["book","Réserver"],["track","Suivi"],["pass","Mon Pass"],["history","Historique"]];
+  let items = [["home","Accueil"],["book","Réserver"],["track","Suivi"],["pass","Mon Pass"],["history","Historique"]];
+  if(!isClientPassRequired()) items = items.filter(([id]) => id !== "pass");
   return `<div class="top-tabs">${items.map(([id,label]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')">${label}</button>`).join("")}</div>`;
 }
 function renderChoosePressing(){
@@ -1402,7 +1448,8 @@ async function loadFeaturedReviews(pressingId){
   state.featuredReviews = data || [];
 }
 function renderBottomNav(){
-  const items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["pass","Pass","🎫"],["history","Historique","🔁"]];
+  let items = [["home","Accueil","🏠"],["book","Réserver","➕"],["track","Suivi","📋"],["pass","Pass","🎫"],["history","Historique","🔁"]];
+  if(!isClientPassRequired()) items = items.filter(([id]) => id !== "pass");
   return `<div class="bottom-nav">${items.map(([id,label,ic]) => `<button class="${state.clientScreen===id?'active':''}" onclick="clientGo('${id}')"><span>${ic}</span><span>${label}</span></button>`).join("")}</div>`;
 }
 
@@ -1463,7 +1510,7 @@ function renderClientHome(){
     <div style="font-size:12px;opacity:.95;margin-top:8px;">Demande libre — date et adresse à ton choix</div>
     <div style="font-size:11px;opacity:.75;margin-top:6px;">Propulsé par Pressing Connecté</div>
   </div>
-  <div class="screen" style="padding-bottom:0;">
+  ${isClientPassRequired() ? `<div class="screen" style="padding-bottom:0;">
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-bottom:4px;" onclick="clientGo('pass')">
       <div>
         <div style="font-size:12px;color:var(--muted);font-weight:600;">Mon Pass</div>
@@ -1471,16 +1518,12 @@ function renderClientHome(){
       </div>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;font-size:12px;">🎫 Pass</button>
     </div>
-  </div>
+  </div>` : ""}
   ${renderCampaignsForClient()}
-  ${hasPass ? `<div class="screen" style="padding-top:4px;">
+  <div class="screen" style="padding-top:4px;">
     <button type="button" class="wa-btn" onclick="whatsAppPressingFromClient()">💬 Écrire au pressing sur WhatsApp</button>
     <p style="font-size:11px;color:var(--muted);margin:6px 2px 0;line-height:1.4;">Ouvre WhatsApp avec un message déjà prêt vers ton pressing. Vérifie le texte puis appuie sur <b>Envoyer</b>.</p>
-  </div>` : `<div class="screen" style="padding-top:4px;">
-    <div class="card" style="font-size:13px;color:var(--muted);">💬 WhatsApp pressing réservé aux clients avec <b>Pass actif</b>.
-      <button class="btn btn-secondary" style="margin-top:10px;" onclick="clientGo('pass')">Voir mon Pass</button>
-    </div>
-  </div>`}
+  </div>
   ${renderReviewsForClient()}
   ${renderClientProfileCard()}
   `;
@@ -1532,7 +1575,7 @@ function renderCampaignsForClient(){
     <div style="border:2px solid #0D9F4F;border-radius:16px;padding:14px;background:linear-gradient(180deg,#E8F8EF 0%,#fff 48%);margin-bottom:8px;">
       <div style="font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#0A7A3C;margin-bottom:4px;">Proposé par ton pressing</div>
       <div style="font-size:16px;font-weight:800;color:var(--ink);margin-bottom:4px;">📢 Collectes & livraisons programmées</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.45;">Créneaux organisés par le pressing (quartier + heure). Distinct de ta demande personnalisée ci-dessus. <b>Pass requis</b>.</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.45;">Créneaux organisés par le pressing (quartier + heure). ${isClientPassRequired() ? 'Distinct de ta demande personnalisée. <b>Pass requis</b>.' : 'Distinct de ta demande personnalisée ci-dessus.'}</p>
       ${state.clientCampaigns.map(c => {
         const isDelivery = /livraison/i.test(c.title||"") || c.mode === "livraison";
         const modeLabel = isDelivery ? "Livraison" : (c.mode==="domicile" ? "Collecte à domicile" : "Collecte — point RDV");
@@ -4035,10 +4078,22 @@ async function adminRunCleanup(kind){
 }
 
 
+async function adminToggleClientPass(enable){
+  try{
+    await saveClientPassFlag(!!enable);
+    alert(enable
+      ? "Pass client ACTIVÉ.\nLes clients devront recharger pour réserver, WhatsApp et collectes programmées."
+      : "Pass client DÉSACTIVÉ.\nMode gratuit : réservations, WhatsApp et collectes sans paiement.");
+    render();
+  } catch(e){
+    alert("Erreur enregistrement : " + (e.message||e) + "\nVérifie la table platform_settings (RLS admin).");
+  }
+}
 function renderAdminPassView(){
   const pending = (state.adminPassRequests||[]).filter(r => r.status === "pending");
   const done = (state.adminPassRequests||[]).filter(r => r.status !== "pending");
   const packs = getPassPacks();
+  const paidOn = isClientPassRequired();
   return `<div class="screen">
     <div class="header-row" style="margin-bottom:12px;">
       <div>
@@ -4047,9 +4102,24 @@ function renderAdminPassView(){
       </div>
       <button class="btn btn-secondary" style="width:auto;padding:8px 12px;margin:0;" onclick="loadAdminPassRequests().then(render)">🔄</button>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
       <button class="btn btn-secondary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pressings')">Pressings</button>
       <button class="btn btn-primary" style="width:auto;padding:8px 14px;margin:0;font-size:13px;" onclick="adminGoView('pass')">🎫 Pass clients ${pending.length?`(${pending.length})`:""}</button>
+    </div>
+
+    <div class="card" style="border:2px solid ${paidOn?'#F0AC3D':'#0D9F4F'};background:${paidOn?'#FFFBEB':'#f0fdf4'};margin-bottom:16px;">
+      <div style="font-weight:800;font-size:15px;margin-bottom:6px;">${paidOn ? "💰 Mode payant ACTIF" : "🎁 Mode gratuit ACTIF"}</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.45;">
+        ${paidOn
+          ? "Les clients voient le Pass, doivent avoir des crédits pour réserver, WhatsApp et les collectes programmées."
+          : "Les clients n'ont <b>rien à payer</b> : réservation, WhatsApp et collectes programmées sont libres. Le menu Pass est masqué."}
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${paidOn
+          ? `<button class="btn btn-primary" style="width:auto;padding:10px 16px;margin:0;" onclick="adminToggleClientPass(false)">Désactiver le Pass (gratuit)</button>`
+          : `<button class="btn btn-primary" style="width:auto;padding:10px 16px;margin:0;" onclick="adminToggleClientPass(true)">Activer le Pass payant</button>`}
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin:10px 0 0;">Tu peux changer d'avis à tout moment. Les tarifs ci-dessous restent configurables même en mode gratuit.</p>
     </div>
 
     <div class="card" style="border-color:var(--brand);background:linear-gradient(160deg,#f0fdf4,#fff);margin-bottom:16px;">
